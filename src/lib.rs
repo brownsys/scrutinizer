@@ -7,7 +7,8 @@ extern crate rustc_middle;
 extern crate rustc_span;
 
 use std::{borrow::Cow, env};
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use clap::Parser;
 
@@ -16,6 +17,7 @@ use rustc_middle::mir as mir;
 use rustc_middle::ty as ty;
 
 use rustc_middle::mir::visit::Visitor;
+use rustc_middle::mir::HasLocalDecls;
 
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
 
@@ -94,9 +96,19 @@ impl rustc_driver::Callbacks for PureFuncCallbacks {
     }
 }
 
+#[derive(Debug)]
+struct FnCallInfo<'tcx> {
+    def_id: hir::def_id::DefId,
+    arg_tys: Vec<ty::Ty<'tcx>>,
+    // Whether we were able to retrieve and check the MIR for the function body.
+    body_checked: bool,
+}
+
 struct FnVisitor<'tcx> {
     tcx: ty::TyCtxt<'tcx>,
-    fn_def_ids: HashSet<hir::def_id::DefId>,
+    // Maintain single list of function calls.
+    fn_calls: Rc<RefCell<Vec<FnCallInfo<'tcx>>>>,
+    current_body: &'tcx mir::Body<'tcx>,
 }
 
 impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
@@ -106,16 +118,18 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
         location: mir::Location,
     ) {
         match &terminator.kind {
-            mir::TerminatorKind::Call { func, .. } => {
-                if let Some((def_id, args)) = func.const_fn_def() {
-                    if !self.fn_def_ids.contains(&def_id) {
-                        println!("Function: {:?}, args: {:?}.", def_id, args);
-                        self.fn_def_ids.insert(def_id);
+            mir::TerminatorKind::Call { func, args, .. } => {
+                if let Some((def_id, _)) = func.const_fn_def() {
+                    // To avoid visiting the same function body twice.
+                    if !self.fn_calls.borrow().iter().any(|fn_call_info| fn_call_info.def_id == def_id) {
+                        let local_decls = self.current_body.local_decls();
+                        let arg_tys = args.iter().map(|arg| arg.ty(local_decls, self.tcx)).collect::<Vec<_>>();
+                        self.fn_calls.borrow_mut().push(FnCallInfo { def_id, arg_tys, body_checked: self.tcx.is_mir_available(def_id) });
                         if self.tcx.is_mir_available(def_id) {
                             let mir = self.tcx.optimized_mir(def_id);
-                            self.visit_body(mir);
-                        } else {
-                            println!("No MIR available for function {:?}.", def_id);
+                            // Swap the current body and continue recursively.
+                            let mut visitor = self.with_new_body(mir);
+                            visitor.visit_body(mir);
                         }
                     }
                 }
@@ -126,16 +140,34 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
     }
 }
 
+impl<'tcx> FnVisitor<'tcx> {
+    fn new(tcx: ty::TyCtxt<'tcx>, current_body: &'tcx mir::Body<'tcx>) -> Self {
+        FnVisitor { tcx, fn_calls: Rc::new(RefCell::new(Vec::new())), current_body }
+    }
+
+    fn with_new_body(&self, new_body: &'tcx mir::Body<'tcx>) -> Self {
+        FnVisitor { tcx: self.tcx, fn_calls: self.fn_calls.clone(), current_body: new_body }
+    }
+
+    fn dump(&self) {
+        for fn_call in self.fn_calls.borrow().iter() {
+            dbg!(fn_call);
+        }
+    }
+}
+
 // The entry point of analysis.
 fn pure_func(tcx: ty::TyCtxt, args: &PureFuncPluginArgs) {
     let hir = tcx.hir();
     for item_id in hir.items() {
         let item = hir.item(item_id);
         let def_id = item.owner_id.to_def_id();
+        // Find the desired function by name.
         if item.ident.name == rustc_span::symbol::Symbol::intern(args.function.as_str()) {
             let mir = tcx.optimized_mir(def_id);
-            let mut visitor = FnVisitor { tcx, fn_def_ids: HashSet::new() };
+            let mut visitor = FnVisitor::new(tcx, mir);
             visitor.visit_body(mir);
+            visitor.dump();
         }
     }
 }
