@@ -109,6 +109,7 @@ struct FnVisitor<'tcx> {
     // Maintain single list of function calls.
     fn_calls: Rc<RefCell<Vec<FnCallInfo<'tcx>>>>,
     current_body: &'tcx mir::Body<'tcx>,
+    current_instance: ty::Instance<'tcx>,
 }
 
 impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
@@ -120,16 +121,33 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
         match &terminator.kind {
             mir::TerminatorKind::Call { func, args, .. } => {
                 if let Some((def_id, _)) = func.const_fn_def() {
-                    // To avoid visiting the same function body twice.
-                    if !self.fn_calls.borrow().iter().any(|fn_call_info| fn_call_info.def_id == def_id) {
-                        let local_decls = self.current_body.local_decls();
-                        let arg_tys = args.iter().map(|arg| arg.ty(local_decls, self.tcx)).collect::<Vec<_>>();
-                        self.fn_calls.borrow_mut().push(FnCallInfo { def_id, arg_tys, body_checked: self.tcx.is_mir_available(def_id) });
-                        if self.tcx.is_mir_available(def_id) {
-                            let mir = self.tcx.optimized_mir(def_id);
-                            // Swap the current body and continue recursively.
-                            let mut visitor = self.with_new_body(mir);
-                            visitor.visit_body(mir);
+                    // To avoid visiting the same function body twice, check whether we have seen it.
+                    if !self.encountered_def_id(def_id) {
+                        // Attempt to resolve the instance via monomorphization.
+                        let func_ty = func.ty(self.current_body, self.tcx);
+                        let func_ty = self.current_instance.subst_mir_and_normalize_erasing_regions(
+                            self.tcx,
+                            ty::ParamEnv::reveal_all(),
+                            func_ty,
+                        );
+                        if let ty::FnDef(callee_def_id, substs) = func_ty.kind() {
+                            let instance = ty::Instance::expect_resolve(self.tcx, ty::ParamEnv::reveal_all(), *callee_def_id, substs);
+                            let def_id = instance.def.def_id();
+                            // Retrieve argument types.
+                            let local_decls = self.current_body.local_decls();
+                            let arg_tys = args.iter().map(|arg| arg.ty(local_decls, self.tcx)).collect::<Vec<_>>();
+                            if self.tcx.is_mir_available(def_id) {
+                                self.add_call(FnCallInfo { def_id, arg_tys, body_checked: true });
+                                let body = self.tcx.optimized_mir(def_id);
+                                // Swap the current instance and body and continue recursively.
+                                let mut visitor = self.with_new_body_and_instance(body, instance);
+                                visitor.visit_body(body);
+                            } else {
+                                // Otherwise, we are unable to verify the purity due to external reference or dynamic dispatch.
+                                self.add_call(FnCallInfo { def_id, arg_tys, body_checked: false });
+                            }
+                        } else {
+                            panic!("Other type of call encountered.");
                         }
                     }
                 }
@@ -141,18 +159,41 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
 }
 
 impl<'tcx> FnVisitor<'tcx> {
-    fn new(tcx: ty::TyCtxt<'tcx>, current_body: &'tcx mir::Body<'tcx>) -> Self {
-        FnVisitor { tcx, fn_calls: Rc::new(RefCell::new(Vec::new())), current_body }
+    fn new(tcx: ty::TyCtxt<'tcx>, current_body: &'tcx mir::Body<'tcx>, current_instance: ty::Instance<'tcx>) -> Self {
+        FnVisitor { tcx, fn_calls: Rc::new(RefCell::new(Vec::new())), current_body, current_instance }
     }
 
-    fn with_new_body(&self, new_body: &'tcx mir::Body<'tcx>) -> Self {
-        FnVisitor { tcx: self.tcx, fn_calls: self.fn_calls.clone(), current_body: new_body }
+    fn with_new_body_and_instance(&self, new_body: &'tcx mir::Body<'tcx>, new_instance: ty::Instance<'tcx>) -> Self {
+        FnVisitor { tcx: self.tcx, fn_calls: self.fn_calls.clone(), current_body: new_body, current_instance: new_instance }
+    }
+
+    fn add_call(&mut self, new_call: FnCallInfo<'tcx>) {
+        self.fn_calls.borrow_mut().push(new_call);
+    }
+
+    fn encountered_def_id(&self, def_id: hir::def_id::DefId) -> bool {
+        self.fn_calls.borrow().iter().any(|fn_call_info| fn_call_info.def_id == def_id)
     }
 
     fn dump(&self) {
         for fn_call in self.fn_calls.borrow().iter() {
             dbg!(fn_call);
         }
+    }
+
+    fn check_purity(&self) -> bool {
+        self.fn_calls.borrow().iter().all(|fn_call| {
+            fn_call.body_checked && fn_call.arg_tys.iter().all(|arg_ty| {
+                if let Some(mutability) = arg_ty.ref_mutability() {
+                    match mutability {
+                        mir::Mutability::Not => true,
+                        mir::Mutability::Mut => false,
+                    }
+                } else {
+                    true
+                }
+            })
+        })
     }
 }
 
@@ -164,10 +205,16 @@ fn pure_func(tcx: ty::TyCtxt, args: &PureFuncPluginArgs) {
         let def_id = item.owner_id.to_def_id();
         // Find the desired function by name.
         if item.ident.name == rustc_span::symbol::Symbol::intern(args.function.as_str()) {
-            let mir = tcx.optimized_mir(def_id);
-            let mut visitor = FnVisitor::new(tcx, mir);
-            visitor.visit_body(mir);
-            visitor.dump();
+            if let hir::ItemKind::Fn(_, _, _) = &item.kind {
+                let main_body = tcx.optimized_mir(def_id);
+                let main_instance = ty::Instance::mono(tcx, def_id);
+                let mut visitor = FnVisitor::new(tcx, main_body, main_instance);
+                // Begin the traversal.
+                visitor.visit_body(main_body);
+                // Show all bodies traversed.
+                visitor.dump();
+                println!("Body purity check result for function {}: {}", args.function, visitor.check_purity());
+            }
         }
     }
 }
