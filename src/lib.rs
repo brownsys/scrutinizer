@@ -175,24 +175,38 @@ impl<'tcx> FnVisitor<'tcx> {
         self.fn_calls.borrow().iter().any(|fn_call_info| fn_call_info.def_id == def_id)
     }
 
-    fn dump(&self) {
+    fn dump_passing(&self) {
         for fn_call in self.fn_calls.borrow().iter() {
-            dbg!(fn_call);
+            if FnVisitor::check_fn_call_purity(fn_call) {
+                dbg!(fn_call);
+            }
         }
+    }
+
+    fn dump_violating(&self) {
+        for fn_call in self.fn_calls.borrow().iter() {
+            if !FnVisitor::check_fn_call_purity(fn_call) {
+                dbg!(fn_call);
+            }
+        }
+    }
+
+    fn check_fn_call_purity(fn_call: &FnCallInfo) -> bool {
+        fn_call.body_checked && fn_call.arg_tys.iter().all(|arg_ty| {
+            if let Some(mutability) = arg_ty.ref_mutability() {
+                match mutability {
+                    mir::Mutability::Not => true,
+                    mir::Mutability::Mut => false,
+                }
+            } else {
+                !arg_ty.is_mutable_ptr()
+            }
+        })
     }
 
     fn check_purity(&self) -> bool {
         self.fn_calls.borrow().iter().all(|fn_call| {
-            fn_call.body_checked && fn_call.arg_tys.iter().all(|arg_ty| {
-                if let Some(mutability) = arg_ty.ref_mutability() {
-                    match mutability {
-                        mir::Mutability::Not => true,
-                        mir::Mutability::Mut => false,
-                    }
-                } else {
-                    true
-                }
-            })
+            FnVisitor::check_fn_call_purity(fn_call)
         })
     }
 }
@@ -211,8 +225,8 @@ fn pure_func(tcx: ty::TyCtxt, args: &PureFuncPluginArgs) {
                 let mut visitor = FnVisitor::new(tcx, main_body, main_instance);
                 // Begin the traversal.
                 visitor.visit_body(main_body);
-                // Show all bodies traversed.
-                visitor.dump();
+                // Show all unchecked bodies encountered.
+                visitor.dump_violating();
                 println!("Body purity check result for function {}: {}", args.function, visitor.check_purity());
             }
         }
