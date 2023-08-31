@@ -100,6 +100,8 @@ impl rustc_driver::Callbacks for PureFuncCallbacks {
 struct FnCallInfo<'tcx> {
     def_id: hir::def_id::DefId,
     arg_tys: Vec<ty::Ty<'tcx>>,
+    call_span: rustc_span::Span,
+    body_span: Option<rustc_span::Span>,
     // Whether we were able to retrieve and check the MIR for the function body.
     body_checked: bool,
 }
@@ -119,7 +121,7 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
         location: mir::Location,
     ) {
         match &terminator.kind {
-            mir::TerminatorKind::Call { func, args, .. } => {
+            mir::TerminatorKind::Call { func, args, fn_span, .. } => {
                 if let Some((def_id, _)) = func.const_fn_def() {
                     // To avoid visiting the same function body twice, check whether we have seen it.
                     if !self.encountered_def_id(def_id) {
@@ -137,14 +139,14 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                             let local_decls = self.current_body.local_decls();
                             let arg_tys = args.iter().map(|arg| arg.ty(local_decls, self.tcx)).collect::<Vec<_>>();
                             if self.tcx.is_mir_available(def_id) {
-                                self.add_call(FnCallInfo { def_id, arg_tys, body_checked: true });
                                 let body = self.tcx.optimized_mir(def_id);
+                                self.add_call(FnCallInfo { def_id, arg_tys, call_span: *fn_span, body_span: Some(body.span), body_checked: true });
                                 // Swap the current instance and body and continue recursively.
                                 let mut visitor = self.with_new_body_and_instance(body, instance);
                                 visitor.visit_body(body);
                             } else {
                                 // Otherwise, we are unable to verify the purity due to external reference or dynamic dispatch.
-                                self.add_call(FnCallInfo { def_id, arg_tys, body_checked: false });
+                                self.add_call(FnCallInfo { def_id, arg_tys, call_span: *fn_span, body_span: None, body_checked: false });
                             }
                         } else {
                             panic!("Other type of call encountered.");
@@ -187,6 +189,17 @@ impl<'tcx> FnVisitor<'tcx> {
         for fn_call in self.fn_calls.borrow().iter() {
             if !FnVisitor::check_fn_call_purity(fn_call) {
                 dbg!(fn_call);
+                match fn_call.body_span {
+                    Some(span) => {
+                        let body_snippet = self.tcx
+                            .sess
+                            .source_map()
+                            .span_to_snippet(span)
+                            .unwrap();
+                        dbg!(body_snippet);
+                    }
+                    None => ()
+                }
             }
         }
     }
