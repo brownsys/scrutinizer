@@ -179,7 +179,7 @@ impl<'tcx> FnVisitor<'tcx> {
 
     fn dump_passing(&self) {
         for fn_call in self.fn_calls.borrow().iter() {
-            if FnVisitor::check_fn_call_purity(fn_call) {
+            if self.check_fn_call_purity(fn_call) {
                 dbg!(fn_call);
             }
         }
@@ -187,7 +187,7 @@ impl<'tcx> FnVisitor<'tcx> {
 
     fn dump_violating(&self) {
         for fn_call in self.fn_calls.borrow().iter() {
-            if !FnVisitor::check_fn_call_purity(fn_call) {
+            if !self.check_fn_call_purity(fn_call) {
                 dbg!(fn_call);
                 match fn_call.body_span {
                     Some(span) => {
@@ -204,22 +204,22 @@ impl<'tcx> FnVisitor<'tcx> {
         }
     }
 
-    fn check_fn_call_purity(fn_call: &FnCallInfo) -> bool {
-        fn_call.body_checked && fn_call.arg_tys.iter().all(|arg_ty| {
-            if let Some(mutability) = arg_ty.ref_mutability() {
-                match mutability {
-                    mir::Mutability::Not => true,
-                    mir::Mutability::Mut => false,
-                }
-            } else {
-                !arg_ty.is_mutable_ptr()
-            }
-        })
+    fn check_fn_call_purity(&self, fn_call: &FnCallInfo) -> bool {
+        fn_call.body_checked && match fn_call.body_span {
+            Some(span) =>
+                self.tcx
+                    .sess
+                    .source_map()
+                    .span_to_snippet(span)
+                    .unwrap()
+                    .find("unsafe").is_none(),
+            None => false
+        }
     }
 
     fn check_purity(&self) -> bool {
         self.fn_calls.borrow().iter().all(|fn_call| {
-            FnVisitor::check_fn_call_purity(fn_call)
+            self.check_fn_call_purity(fn_call)
         })
     }
 }
