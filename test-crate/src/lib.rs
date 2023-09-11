@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, LinkedList};
 use std::collections::HashSet;
 
 use uuid::Uuid;
@@ -35,6 +35,11 @@ pub fn contains_vec(haystack: &Vec<usize>, needle: &usize) -> bool {
     haystack.contains(needle)
 }
 
+// Pure function: checking whether a linked list contains an item.
+pub fn contains_linked_list(haystack: &LinkedList<usize>, needle: &usize) -> bool {
+    haystack.contains(needle)
+}
+
 // Pure function: checking whether a hash map contains a key.
 pub fn contains_hashmap(haystack: &HashMap<usize, usize>, needle: &usize) -> bool {
     haystack.contains_key(needle)
@@ -43,6 +48,16 @@ pub fn contains_hashmap(haystack: &HashMap<usize, usize>, needle: &usize) -> boo
 // Pure function: checking whether a hash set contains an item.
 pub fn contains_hashset(haystack: &HashSet<usize>, needle: &usize) -> bool {
     haystack.contains(needle)
+}
+
+// Pure function: checking whether a binary tree map contains an item.
+pub fn contains_btreemap(haystack: &BTreeMap<usize, usize>, needle: &usize) -> bool {
+    haystack.contains_key(needle)
+}
+
+// Pure function: retrieving Vec's length.
+pub fn len_vec(vec: &Vec<usize>) -> usize {
+    vec.len()
 }
 
 // Raw mut pointer dereference.
