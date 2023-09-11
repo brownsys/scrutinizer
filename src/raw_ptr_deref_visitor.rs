@@ -21,7 +21,8 @@ impl<'tcx> mir::visit::Visitor<'tcx> for RawPtrDerefVisitor<'tcx> {
             // Retrieve type of the local after each projection, check if it is an unsafe pointer.
             // TODO(artem): check whether it works with more involved projections.
             for (place_ref, _) in place.iter_projections() {
-                if place_ref.ty(self.local_decls, self.tcx).ty.is_unsafe_ptr() {
+                let ty = place_ref.ty(self.local_decls, self.tcx).ty;
+                if ty.is_unsafe_ptr() && ty.is_mutable_ptr() {
                     self.has_raw_ptr_deref = true;
                 }
             }

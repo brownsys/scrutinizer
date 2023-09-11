@@ -45,25 +45,26 @@ pub fn contains_hashset(haystack: &HashSet<usize>, needle: &usize) -> bool {
     haystack.contains(needle)
 }
 
-// Raw pointer dereference.
-pub unsafe fn raw_ptr_deref() {
+// Raw mut pointer dereference.
+pub unsafe fn raw_mut_ptr_deref() {
     let mut x = 42;
     let raw = &mut x as *mut i32;
     let _points_at = *raw;
 }
 
-// Raw pointer dereference outer function.
-pub unsafe fn raw_ptr_deref_outer() {
-    raw_ptr_deref();
+// Raw mut pointer dereference outer function.
+pub unsafe fn raw_mut_ptr_deref_outer() {
+    raw_mut_ptr_deref();
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// Raw const pointer dereference.
+pub unsafe fn raw_const_ptr_deref() {
+    let x = 42;
+    let raw = &x as *const i32;
+    let _points_at = *raw;
+}
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+// Raw const pointer dereference outer function.
+pub unsafe fn raw_const_ptr_deref_outer() {
+    raw_const_ptr_deref();
 }
