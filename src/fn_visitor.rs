@@ -48,7 +48,18 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                         );
                         if let ty::FnDef(callee_def_id, substs) = func_ty.kind() {
                             let instance = ty::Instance::expect_resolve(self.tcx, ty::ParamEnv::reveal_all(), *callee_def_id, substs);
-                            let def_id = instance.def.def_id();
+
+                            // Carve out an exception for Fn(...) -> ... casted to another type.
+                            let def_id = if let ty::InstanceDef::ClosureOnceShim { .. } = instance.def {
+                                if let ty::TyKind::Closure(def_id, ..) = instance.substs[0].expect_ty().kind() {
+                                    *def_id
+                                } else {
+                                    instance.def.def_id()
+                                }
+                            } else {
+                                instance.def.def_id()
+                            };
+
                             // Retrieve argument types.
                             let local_decls = self.current_body.local_decls();
                             let arg_tys = args.iter().map(|arg| arg.ty(local_decls, self.tcx)).collect::<Vec<_>>();
@@ -106,6 +117,17 @@ impl<'tcx> FnVisitor<'tcx> {
         for fn_call in self.fn_calls.borrow().iter() {
             if self.check_fn_call_purity(fn_call) {
                 dbg!(fn_call);
+                match fn_call.body_span {
+                    Some(span) => {
+                        let body_snippet = self.tcx
+                            .sess
+                            .source_map()
+                            .span_to_snippet(span)
+                            .unwrap();
+                        dbg!(body_snippet);
+                    }
+                    None => ()
+                }
             }
         }
     }

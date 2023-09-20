@@ -112,7 +112,11 @@ fn pure_func(tcx: ty::TyCtxt, args: &PureFuncPluginArgs) {
                 let mut visitor = FnVisitor::new(tcx, main_body, main_instance);
                 // Begin the traversal.
                 visitor.visit_body(main_body);
+                // Show all checked bodies encountered.
+                dbg!("Dumping all passing function bodies:");
+                visitor.dump_passing();
                 // Show all unchecked bodies encountered.
+                dbg!("Dumping all violating function bodies:");
                 visitor.dump_violating();
                 println!("Body purity check result for function {}: {}", args.function, visitor.check_purity());
             }
