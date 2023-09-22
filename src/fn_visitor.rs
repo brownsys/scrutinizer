@@ -1,3 +1,5 @@
+use regex::Regex;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -152,7 +154,13 @@ impl<'tcx> FnVisitor<'tcx> {
     }
 
     fn check_fn_call_purity(&self, fn_call: &FnCallInfo) -> bool {
-        fn_call.body_checked && !fn_call.raw_ptr_deref
+        let allowed_libs =
+            vec![Regex::new(r"core\[\w*\]::intrinsics").unwrap(),
+                 Regex::new(r"core\[\w*\]::panicking").unwrap()];
+
+        let def_path_str = format!("{:?}", fn_call.def_id);
+        (fn_call.body_checked && !fn_call.raw_ptr_deref) ||
+            (allowed_libs.iter().any(|lib| lib.is_match(&def_path_str)))
     }
 
     pub fn check_purity(&self) -> bool {

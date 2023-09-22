@@ -12,3 +12,4 @@ rustc_utils = "=0.6.0-nightly-2023-04-12"
 env_logger = "0.10"
 clap = {version = "4", features = ["derive"]}
 serde = {version = "1", features = ["derive"]}
+regex = "1.9.1"
