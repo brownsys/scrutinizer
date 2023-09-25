@@ -9,25 +9,33 @@ pub struct RawPtrDerefVisitor<'tcx> {
     has_raw_ptr_deref: bool,
 }
 
+fn has_raw_ptr_deref<'tcx>(place: &mir::Place<'tcx>, tcx: ty::TyCtxt<'tcx>,
+                           local_decls: &'tcx mir::LocalDecls<'tcx>) -> bool {
+    place.iter_projections().any(|(place_ref, _)| {
+        let ty = place_ref.ty(local_decls, tcx).ty;
+        ty.is_unsafe_ptr() && ty.is_mutable_ptr()
+    })
+}
+
 impl<'tcx> mir::visit::Visitor<'tcx> for RawPtrDerefVisitor<'tcx> {
-    fn visit_place(
-        &mut self,
-        place: &mir::Place<'tcx>,
-        context: mir::visit::PlaceContext,
-        location: mir::Location,
-    ) {
-        // If Place contains a Deref projection.
-        if place.is_indirect() {
-            // Retrieve type of the local after each projection, check if it is an unsafe pointer.
-            // TODO(artem): check whether it works with more involved projections.
-            for (place_ref, _) in place.iter_projections() {
-                let ty = place_ref.ty(self.local_decls, self.tcx).ty;
-                if ty.is_unsafe_ptr() && ty.is_mutable_ptr() {
-                    self.has_raw_ptr_deref = true;
+    fn visit_statement(&mut self, statement: &mir::Statement<'tcx>, location: mir::Location) {
+        if let mir::StatementKind::Assign(assignment) = &statement.kind {
+            let place = &assignment.0;
+            let rvalue = &assignment.1;
+
+            if has_raw_ptr_deref(place, self.tcx, self.local_decls) {
+                self.has_raw_ptr_deref = true;
+            } else {
+                if let mir::Rvalue::Ref(_, borrow_kind, borrow_place) = rvalue {
+                    if let mir::Mutability::Mut = borrow_kind.mutability() {
+                        if has_raw_ptr_deref(borrow_place, self.tcx, self.local_decls) {
+                            self.has_raw_ptr_deref = true;
+                        }
+                    }
                 }
             }
-        }
-        self.super_place(place, context, location);
+        };
+        self.super_statement(statement, location);
     }
 }
 
