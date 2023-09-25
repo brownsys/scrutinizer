@@ -36,63 +36,80 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
         terminator: &mir::Terminator<'tcx>,
         location: mir::Location,
     ) {
-        match &terminator.kind {
-            mir::TerminatorKind::Call { func, args, fn_span, .. } => {
-                if let Some((def_id, _)) = func.const_fn_def() {
-                    // To avoid visiting the same function body twice, check whether we have seen it.
-                    if !self.encountered_def_id(def_id) {
-                        // Attempt to resolve the instance via monomorphization.
-                        let func_ty = func.ty(self.current_body, self.tcx);
-                        let func_ty = self.current_instance.subst_mir_and_normalize_erasing_regions(
-                            self.tcx,
-                            ty::ParamEnv::reveal_all(),
-                            func_ty,
-                        );
-                        if let ty::FnDef(callee_def_id, substs) = func_ty.kind() {
-                            let instance = ty::Instance::expect_resolve(self.tcx, ty::ParamEnv::reveal_all(), *callee_def_id, substs);
+        if let mir::TerminatorKind::Call { func, args, fn_span, .. } = &terminator.kind {
+            // Attempt to resolve the instance via monomorphization.
+            let func_ty = self.current_instance.subst_mir_and_normalize_erasing_regions(
+                self.tcx,
+                ty::ParamEnv::reveal_all(),
+                func.ty(self.current_body, self.tcx),
+            );
 
-                            // Carve out an exception for Fn(...) -> ... casted to another type.
-                            let def_id = if let ty::InstanceDef::ClosureOnceShim { .. } = instance.def {
-                                if let ty::TyKind::Closure(def_id, ..) = instance.substs[0].expect_ty().kind() {
-                                    *def_id
-                                } else {
-                                    instance.def.def_id()
-                                }
-                            } else {
-                                instance.def.def_id()
-                            };
+            if let ty::FnDef(callee_def_id, substs) = func_ty.kind() {
+                let instance = ty::Instance::expect_resolve(self.tcx, ty::ParamEnv::reveal_all(), *callee_def_id, substs);
 
-                            // Retrieve argument types.
-                            let local_decls = self.current_body.local_decls();
-                            let arg_tys = args.iter().map(|arg| arg.ty(local_decls, self.tcx)).collect::<Vec<_>>();
-                            if self.tcx.is_mir_available(def_id) {
-                                let body = self.tcx.optimized_mir(def_id);
-
-                                let mut ptr_deref_visitor = RawPtrDerefVisitor::new(self.tcx, body.local_decls(), def_id);
-                                ptr_deref_visitor.visit_body(body);
-                                self.add_call(FnCallInfo {
-                                    def_id,
-                                    arg_tys,
-                                    call_span: *fn_span,
-                                    body_span: Some(body.span),
-                                    body_checked: true,
-                                    raw_ptr_deref: ptr_deref_visitor.check(),
-                                });
-
-                                // Swap the current instance and body and continue recursively.
-                                let mut visitor = self.with_new_body_and_instance(body, instance);
-                                visitor.visit_body(body);
-                            } else {
-                                // Otherwise, we are unable to verify the purity due to external reference or dynamic dispatch.
-                                self.add_call(FnCallInfo { def_id, arg_tys, call_span: *fn_span, body_span: None, body_checked: false, raw_ptr_deref: false });
-                            }
-                        } else {
-                            panic!("Other type of call encountered.");
-                        }
+                // Introspect all interesting types.
+                match instance.def {
+                    ty::InstanceDef::Item(_) => {}
+                    ty::InstanceDef::Intrinsic(_) => {}
+                    _ => {
+                        dbg!(instance);
                     }
                 }
+
+                // Carve out an exception for Fn(...) -> ... casted to another type.
+                let def_id = match instance.def {
+                    ty::InstanceDef::FnPtrShim { .. } |
+                    ty::InstanceDef::Virtual { .. } |
+                    ty::InstanceDef::ClosureOnceShim { .. } => {
+                        if let ty::TyKind::Closure(def_id, ..) = instance.substs[0].expect_ty().kind() {
+                            *def_id
+                        } else {
+                            instance.def.def_id()
+                        }
+                    }
+                    _ => instance.def.def_id()
+                };
+
+                // To avoid visiting the same function body twice, check whether we have seen it.
+                if !self.encountered_def_id(def_id) {
+                    if self.tcx.is_const_fn(def_id) {
+                        return;
+                    }
+
+                    // Retrieve argument types.
+                    let arg_tys = args.iter().map(|arg| {
+                        if let Some(place) = arg.place() {
+                            place.ty(self.current_body, self.tcx).ty
+                        } else {
+                            arg.ty(self.current_body, self.tcx)
+                        }
+                    }).collect::<Vec<_>>();
+
+                    if self.tcx.is_mir_available(def_id) {
+                        let body = self.tcx.optimized_mir(def_id);
+
+                        let mut ptr_deref_visitor = RawPtrDerefVisitor::new(self.tcx, body.local_decls(), def_id);
+                        ptr_deref_visitor.visit_body(body);
+                        self.add_call(FnCallInfo {
+                            def_id,
+                            arg_tys,
+                            call_span: *fn_span,
+                            body_span: Some(body.span),
+                            body_checked: true,
+                            raw_ptr_deref: ptr_deref_visitor.check(),
+                        });
+
+                        // Swap the current instance and body and continue recursively.
+                        let mut visitor = self.with_new_body_and_instance(body, instance);
+                        visitor.visit_body(body);
+                    } else {
+                        // Otherwise, we are unable to verify the purity due to external reference or dynamic dispatch.
+                        self.add_call(FnCallInfo { def_id, arg_tys, call_span: *fn_span, body_span: None, body_checked: false, raw_ptr_deref: false });
+                    }
+                }
+            } else {
+                panic!("Other type of call encountered.");
             }
-            _ => {}
         }
         self.super_terminator(terminator, location);
     }
