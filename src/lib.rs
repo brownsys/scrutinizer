@@ -2,9 +2,9 @@
 
 mod fn_visitor;
 mod raw_ptr_deref_visitor;
+mod uncast_visitor;
 
 use crate::fn_visitor::FnVisitor;
-use crate::raw_ptr_deref_visitor::RawPtrDerefVisitor;
 
 extern crate rustc_driver;
 extern crate rustc_hir;
@@ -113,8 +113,8 @@ fn pure_func(tcx: ty::TyCtxt, args: &PureFuncPluginArgs) {
                 // Begin the traversal.
                 visitor.visit_body(main_body);
                 // Show all checked bodies encountered.
-                dbg!("Dumping all passing function bodies:");
-                visitor.dump_passing();
+                // dbg!("Dumping all passing function bodies:");
+                // visitor.dump_passing();
                 // Show all unchecked bodies encountered.
                 dbg!("Dumping all violating function bodies:");
                 visitor.dump_violating();

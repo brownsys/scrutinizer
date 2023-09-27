@@ -8,7 +8,8 @@ use rustc_middle::mir as mir;
 use rustc_middle::ty as ty;
 
 use rustc_middle::mir::HasLocalDecls;
-use crate::raw_ptr_deref_visitor::RawPtrDerefVisitor;
+use crate::raw_ptr_deref_visitor::has_raw_ptr_deref;
+use crate::uncast_visitor::uncast;
 
 #[derive(Debug)]
 struct FnCallInfo<'tcx> {
@@ -56,13 +57,30 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                     }
                 }
 
+                // Retrieve argument types.
+                let arg_tys = args.iter().map(|arg| {
+                    arg.ty(self.current_body, self.tcx)
+                }).collect::<Vec<_>>();
+
                 // Carve out an exception for Fn(...) -> ... casted to another type.
                 let def_id = match instance.def {
                     ty::InstanceDef::FnPtrShim { .. } |
                     ty::InstanceDef::Virtual { .. } |
                     ty::InstanceDef::ClosureOnceShim { .. } => {
-                        if let ty::TyKind::Closure(def_id, ..) = instance.substs[0].expect_ty().kind() {
-                            *def_id
+                        if let Some(place) = args[0].place() {
+                            if let ty::TyKind::Closure(def_id, ..) = place.ty(self.current_body, self.tcx).ty.kind() {
+                                *def_id
+                            } else {
+                                if let Some(original_ty) = uncast(self.tcx, place, self.current_body) {
+                                    if let ty::TyKind::Closure(def_id, ..) = original_ty.kind() {
+                                        *def_id
+                                    } else {
+                                        instance.def.def_id()
+                                    }
+                                } else {
+                                    instance.def.def_id()
+                                }
+                            }
                         } else {
                             instance.def.def_id()
                         }
@@ -72,31 +90,20 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
 
                 // To avoid visiting the same function body twice, check whether we have seen it.
                 if !self.encountered_def_id(def_id) {
-                    if self.tcx.is_const_fn(def_id) {
+                    if self.tcx.is_const_fn_raw(def_id) {
                         return;
                     }
-
-                    // Retrieve argument types.
-                    let arg_tys = args.iter().map(|arg| {
-                        if let Some(place) = arg.place() {
-                            place.ty(self.current_body, self.tcx).ty
-                        } else {
-                            arg.ty(self.current_body, self.tcx)
-                        }
-                    }).collect::<Vec<_>>();
 
                     if self.tcx.is_mir_available(def_id) {
                         let body = self.tcx.optimized_mir(def_id);
 
-                        let mut ptr_deref_visitor = RawPtrDerefVisitor::new(self.tcx, body.local_decls(), def_id);
-                        ptr_deref_visitor.visit_body(body);
                         self.add_call(FnCallInfo {
                             def_id,
                             arg_tys,
                             call_span: *fn_span,
                             body_span: Some(body.span),
                             body_checked: true,
-                            raw_ptr_deref: ptr_deref_visitor.check(),
+                            raw_ptr_deref: has_raw_ptr_deref(self.tcx, body),
                         });
 
                         // Swap the current instance and body and continue recursively.
@@ -108,7 +115,7 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                     }
                 }
             } else {
-                panic!("Other type of call encountered.");
+                panic!("Other type of call encountered: {:?}", func_ty.kind());
             }
         }
         self.super_terminator(terminator, location);

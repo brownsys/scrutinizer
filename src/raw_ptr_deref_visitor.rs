@@ -1,18 +1,18 @@
 use rustc_hir as hir;
 use rustc_middle::mir as mir;
 use rustc_middle::ty as ty;
+use rustc_middle::mir::visit::Visitor;
 
-pub struct RawPtrDerefVisitor<'tcx> {
+struct RawPtrDerefVisitor<'tcx> {
     tcx: ty::TyCtxt<'tcx>,
-    local_decls: &'tcx mir::LocalDecls<'tcx>,
-    def_id: hir::def_id::DefId,
+    body: &'tcx mir::Body<'tcx>,
     has_raw_ptr_deref: bool,
 }
 
-fn has_raw_ptr_deref<'tcx>(place: &mir::Place<'tcx>, tcx: ty::TyCtxt<'tcx>,
-                           local_decls: &'tcx mir::LocalDecls<'tcx>) -> bool {
+fn place_has_raw_ptr_deref<'tcx>(place: &mir::Place<'tcx>, tcx: ty::TyCtxt<'tcx>,
+                                 body: &'tcx mir::Body<'tcx>) -> bool {
     place.iter_projections().any(|(place_ref, _)| {
-        let ty = place_ref.ty(local_decls, tcx).ty;
+        let ty = place_ref.ty(body, tcx).ty;
         ty.is_unsafe_ptr() && ty.is_mutable_ptr()
     })
 }
@@ -23,12 +23,12 @@ impl<'tcx> mir::visit::Visitor<'tcx> for RawPtrDerefVisitor<'tcx> {
             let place = &assignment.0;
             let rvalue = &assignment.1;
 
-            if has_raw_ptr_deref(place, self.tcx, self.local_decls) {
+            if place_has_raw_ptr_deref(place, self.tcx, self.body) {
                 self.has_raw_ptr_deref = true;
             } else {
                 if let mir::Rvalue::Ref(_, borrow_kind, borrow_place) = rvalue {
                     if let mir::Mutability::Mut = borrow_kind.mutability() {
-                        if has_raw_ptr_deref(borrow_place, self.tcx, self.local_decls) {
+                        if place_has_raw_ptr_deref(borrow_place, self.tcx, self.body) {
                             self.has_raw_ptr_deref = true;
                         }
                     }
@@ -39,12 +39,8 @@ impl<'tcx> mir::visit::Visitor<'tcx> for RawPtrDerefVisitor<'tcx> {
     }
 }
 
-impl<'tcx> RawPtrDerefVisitor<'tcx> {
-    pub fn new(tcx: ty::TyCtxt<'tcx>, local_decls: &'tcx mir::LocalDecls<'tcx>, def_id: hir::def_id::DefId) -> Self {
-        Self { tcx, local_decls, def_id, has_raw_ptr_deref: false }
-    }
-
-    pub fn check(&self) -> bool {
-        self.has_raw_ptr_deref
-    }
+pub fn has_raw_ptr_deref<'tcx>(tcx: ty::TyCtxt<'tcx>, body: &'tcx mir::Body<'tcx>) -> bool {
+    let mut ptr_deref_visitor = RawPtrDerefVisitor { tcx, body, has_raw_ptr_deref: false };
+    ptr_deref_visitor.visit_body(body);
+    ptr_deref_visitor.has_raw_ptr_deref
 }
