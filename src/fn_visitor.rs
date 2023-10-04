@@ -9,7 +9,6 @@ use rustc_middle::ty as ty;
 
 use rustc_middle::mir::HasLocalDecls;
 use crate::raw_ptr_deref_visitor::has_raw_ptr_deref;
-use crate::uncast_visitor::uncast;
 
 #[derive(Debug)]
 struct FnCallInfo<'tcx> {
@@ -49,12 +48,9 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                 let instance = ty::Instance::expect_resolve(self.tcx, ty::ParamEnv::reveal_all(), *callee_def_id, substs);
 
                 // Introspect all interesting types.
-                match instance.def {
-                    ty::InstanceDef::Item(_) => {}
-                    ty::InstanceDef::Intrinsic(_) => {}
-                    _ => {
-                        dbg!(instance);
-                    }
+                match instance.def.def_id_if_not_guaranteed_local_codegen() {
+                    None => { dbg!(instance); }
+                    _ => {}
                 }
 
                 // Retrieve argument types.
@@ -62,31 +58,32 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                     arg.ty(self.current_body, self.tcx)
                 }).collect::<Vec<_>>();
 
+                let def_id = instance.def_id();
                 // Carve out an exception for Fn(...) -> ... casted to another type.
-                let def_id = match instance.def {
-                    ty::InstanceDef::FnPtrShim { .. } |
-                    ty::InstanceDef::Virtual { .. } |
-                    ty::InstanceDef::ClosureOnceShim { .. } => {
-                        if let Some(place) = args[0].place() {
-                            if let ty::TyKind::Closure(def_id, ..) = place.ty(self.current_body, self.tcx).ty.kind() {
-                                *def_id
-                            } else {
-                                if let Some(original_ty) = uncast(self.tcx, place, self.current_body) {
-                                    if let ty::TyKind::Closure(def_id, ..) = original_ty.kind() {
-                                        *def_id
-                                    } else {
-                                        instance.def.def_id()
-                                    }
-                                } else {
-                                    instance.def.def_id()
-                                }
-                            }
-                        } else {
-                            instance.def.def_id()
-                        }
-                    }
-                    _ => instance.def.def_id()
-                };
+                // let def_id = match instance.def {
+                //     ty::InstanceDef::FnPtrShim { .. } |
+                //     ty::InstanceDef::Virtual { .. } |
+                //     ty::InstanceDef::ClosureOnceShim { .. } => {
+                //         if let Some(place) = args[0].place() {
+                //             if let ty::TyKind::Closure(def_id, ..) = place.ty(self.current_body, self.tcx).ty.kind() {
+                //                 *def_id
+                //             } else {
+                //                 if let Some(original_ty) = uncast(self.tcx, place, self.current_body) {
+                //                     if let ty::TyKind::Closure(def_id, ..) = original_ty.kind() {
+                //                         *def_id
+                //                     } else {
+                //                         instance.def.def_id()
+                //                     }
+                //                 } else {
+                //                     instance.def.def_id()
+                //                 }
+                //             }
+                //         } else {
+                //             instance.def.def_id()
+                //         }
+                //     }
+                //     _ => instance.def.def_id()
+                // };
 
                 // To avoid visiting the same function body twice, check whether we have seen it.
                 if !self.encountered_def_id(def_id) {
@@ -142,7 +139,7 @@ impl<'tcx> FnVisitor<'tcx> {
     pub fn dump_passing(&self) {
         for fn_call in self.fn_calls.borrow().iter() {
             if self.check_fn_call_purity(fn_call) {
-                dbg!(fn_call);
+                println!("--> Passing function call: {:#?}", fn_call);
                 match fn_call.body_span {
                     Some(span) => {
                         let body_snippet = self.tcx
@@ -150,7 +147,7 @@ impl<'tcx> FnVisitor<'tcx> {
                             .source_map()
                             .span_to_snippet(span)
                             .unwrap();
-                        dbg!(body_snippet);
+                        println!("Body snippet: {:?}", body_snippet);
                     }
                     None => ()
                 }
@@ -161,7 +158,7 @@ impl<'tcx> FnVisitor<'tcx> {
     pub fn dump_violating(&self) {
         for fn_call in self.fn_calls.borrow().iter() {
             if !self.check_fn_call_purity(fn_call) {
-                dbg!(fn_call);
+                println!("--> Violating function call: {:#?}", fn_call);
                 match fn_call.body_span {
                     Some(span) => {
                         let body_snippet = self.tcx
@@ -169,7 +166,7 @@ impl<'tcx> FnVisitor<'tcx> {
                             .source_map()
                             .span_to_snippet(span)
                             .unwrap();
-                        dbg!(body_snippet);
+                        println!("Body snippet: {:?}", body_snippet);
                     }
                     None => ()
                 }

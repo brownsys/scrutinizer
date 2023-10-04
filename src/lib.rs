@@ -17,6 +17,7 @@ use std::{borrow::Cow, env};
 use clap::Parser;
 
 use rustc_hir as hir;
+use rustc_middle::mir as mir;
 use rustc_middle::ty as ty;
 
 use rustc_middle::mir::visit::Visitor;
@@ -106,19 +107,38 @@ fn pure_func(tcx: ty::TyCtxt, args: &PureFuncPluginArgs) {
         let def_id = item.owner_id.to_def_id();
         // Find the desired function by name.
         if item.ident.name == rustc_span::symbol::Symbol::intern(args.function.as_str()) {
-            if let hir::ItemKind::Fn(_, _, _) = &item.kind {
+            println!("[STARTING ANALYSIS]");
+
+            if let hir::ItemKind::Fn(fn_sig, _, _) = &item.kind {
                 let main_body = tcx.optimized_mir(def_id);
                 let main_instance = ty::Instance::mono(tcx, def_id);
+
+                println!("--> Checking for mutable reference params in {}...", args.function);
+                let mutable = fn_sig.decl.inputs.iter().any(|arg| {
+                    if let hir::TyKind::Ref(_, mut_ty) = &arg.kind {
+                        if mut_ty.mutbl == mir::Mutability::Mut {
+                            return true;
+                        }
+                    }
+                    return false;
+                });
+                if mutable {
+                    println!("--> Cannot ensure the purity of the function, as some of the arguments are mutable refs!");
+                    return;
+                }
+
+                println!("--> Performing call tree traversal...");
+
                 let mut visitor = FnVisitor::new(tcx, main_body, main_instance);
                 // Begin the traversal.
                 visitor.visit_body(main_body);
                 // Show all checked bodies encountered.
-                // dbg!("Dumping all passing function bodies:");
-                // visitor.dump_passing();
+                println!("--> Dumping all passing function bodies:");
+                visitor.dump_passing();
                 // Show all unchecked bodies encountered.
-                dbg!("Dumping all violating function bodies:");
+                println!("--> Dumping all violating function bodies:");
                 visitor.dump_violating();
-                println!("Body purity check result for function {}: {}", args.function, visitor.check_purity());
+                println!("--> Body purity check result for function {}: {}", args.function, visitor.check_purity());
             }
         }
     }
