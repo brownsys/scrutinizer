@@ -138,6 +138,9 @@ fn pure_func(tcx: ty::TyCtxt, args: &PureFuncPluginArgs) {
                 // Show all unchecked bodies encountered.
                 println!("--> Dumping all violating function bodies:");
                 visitor.dump_violating();
+                // Show all unhandled terminators encountered.
+                println!("--> Dumping all unhandled terminators:");
+                visitor.dump_unhandled_terminators();
                 println!("--> Body purity check result for function {}: {}", args.function, visitor.check_purity());
             }
         }

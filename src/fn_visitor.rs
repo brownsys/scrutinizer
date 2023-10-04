@@ -26,6 +26,7 @@ pub struct FnVisitor<'tcx> {
     tcx: ty::TyCtxt<'tcx>,
     // Maintain single list of function calls.
     fn_calls: Rc<RefCell<Vec<FnCallInfo<'tcx>>>>,
+    unhandled_terminators: Rc<RefCell<Vec<mir::Terminator<'tcx>>>>,
     current_body: &'tcx mir::Body<'tcx>,
     current_instance: ty::Instance<'tcx>,
 }
@@ -112,7 +113,7 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                     }
                 }
             } else {
-                panic!("Other type of call encountered: {:?}", func_ty.kind());
+                self.unhandled_terminators.borrow_mut().push(terminator.to_owned());
             }
         }
         self.super_terminator(terminator, location);
@@ -121,11 +122,24 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
 
 impl<'tcx> FnVisitor<'tcx> {
     pub fn new(tcx: ty::TyCtxt<'tcx>, current_body: &'tcx mir::Body<'tcx>, current_instance: ty::Instance<'tcx>) -> Self {
-        Self { tcx, fn_calls: Rc::new(RefCell::new(Vec::new())), current_body, current_instance }
+        Self {
+            tcx,
+            fn_calls: Rc::new(RefCell::new(Vec::new())),
+            current_body,
+            current_instance,
+            unhandled_terminators: Rc::new(RefCell::new(Vec::new())),
+        }
     }
 
     fn with_new_body_and_instance(&self, new_body: &'tcx mir::Body<'tcx>, new_instance: ty::Instance<'tcx>) -> Self {
-        Self { tcx: self.tcx, fn_calls: self.fn_calls.clone(), current_body: new_body, current_instance: new_instance }
+        Self {
+            tcx:
+            self.tcx,
+            fn_calls: self.fn_calls.clone(),
+            current_body: new_body,
+            current_instance: new_instance,
+            unhandled_terminators: self.unhandled_terminators.clone(),
+        }
     }
 
     fn add_call(&mut self, new_call: FnCallInfo<'tcx>) {
@@ -174,6 +188,12 @@ impl<'tcx> FnVisitor<'tcx> {
         }
     }
 
+    pub fn dump_unhandled_terminators(&self) {
+        for unhandled_terminator in self.unhandled_terminators.borrow().iter() {
+            println!("--> Unhandled terminator: {:#?}", unhandled_terminator);
+        }
+    }
+
     fn check_fn_call_purity(&self, fn_call: &FnCallInfo) -> bool {
         let allowed_libs =
             vec![Regex::new(r"core\[\w*\]::intrinsics").unwrap(),
@@ -187,6 +207,6 @@ impl<'tcx> FnVisitor<'tcx> {
     pub fn check_purity(&self) -> bool {
         self.fn_calls.borrow().iter().all(|fn_call| {
             self.check_fn_call_purity(fn_call)
-        })
+        }) && self.unhandled_terminators.borrow().is_empty()
     }
 }
