@@ -6,15 +6,17 @@ use std::rc::Rc;
 use rustc_hir as hir;
 use rustc_middle::mir as mir;
 use rustc_middle::ty as ty;
-
 use rustc_middle::mir::HasLocalDecls;
+use rustc_middle::mir::visit::Visitor;
+
+use crate::fn_cast_visitor::get_all_fn_casts;
 use crate::raw_ptr_deref_visitor::has_raw_ptr_deref;
 
 #[derive(Debug)]
 struct FnCallInfo<'tcx> {
     def_id: hir::def_id::DefId,
-    arg_tys: Vec<ty::Ty<'tcx>>,
-    call_span: rustc_span::Span,
+    arg_tys: Option<Vec<ty::Ty<'tcx>>>,
+    call_span: Option<rustc_span::Span>,
     body_span: Option<rustc_span::Span>,
     // Whether we were able to retrieve and check the MIR for the function body.
     body_checked: bool,
@@ -45,73 +47,13 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                 func.ty(self.current_body, self.tcx),
             );
 
-            if let ty::FnDef(callee_def_id, substs) = func_ty.kind() {
-                let instance = ty::Instance::expect_resolve(self.tcx, ty::ParamEnv::reveal_all(), *callee_def_id, substs);
-
-                // Introspect all interesting types.
-                match instance.def.def_id_if_not_guaranteed_local_codegen() {
-                    None => { dbg!(instance); }
-                    _ => {}
-                }
-
+            if let ty::FnDef(def_id, substs) = func_ty.kind() {
                 // Retrieve argument types.
                 let arg_tys = args.iter().map(|arg| {
                     arg.ty(self.current_body, self.tcx)
                 }).collect::<Vec<_>>();
 
-                let def_id = instance.def_id();
-                // Carve out an exception for Fn(...) -> ... casted to another type.
-                // let def_id = match instance.def {
-                //     ty::InstanceDef::FnPtrShim { .. } |
-                //     ty::InstanceDef::Virtual { .. } |
-                //     ty::InstanceDef::ClosureOnceShim { .. } => {
-                //         if let Some(place) = args[0].place() {
-                //             if let ty::TyKind::Closure(def_id, ..) = place.ty(self.current_body, self.tcx).ty.kind() {
-                //                 *def_id
-                //             } else {
-                //                 if let Some(original_ty) = uncast(self.tcx, place, self.current_body) {
-                //                     if let ty::TyKind::Closure(def_id, ..) = original_ty.kind() {
-                //                         *def_id
-                //                     } else {
-                //                         instance.def.def_id()
-                //                     }
-                //                 } else {
-                //                     instance.def.def_id()
-                //                 }
-                //             }
-                //         } else {
-                //             instance.def.def_id()
-                //         }
-                //     }
-                //     _ => instance.def.def_id()
-                // };
-
-                // To avoid visiting the same function body twice, check whether we have seen it.
-                if !self.encountered_def_id(def_id) {
-                    if self.tcx.is_const_fn_raw(def_id) {
-                        return;
-                    }
-
-                    if self.tcx.is_mir_available(def_id) {
-                        let body = self.tcx.optimized_mir(def_id);
-
-                        self.add_call(FnCallInfo {
-                            def_id,
-                            arg_tys,
-                            call_span: *fn_span,
-                            body_span: Some(body.span),
-                            body_checked: true,
-                            raw_ptr_deref: has_raw_ptr_deref(self.tcx, body),
-                        });
-
-                        // Swap the current instance and body and continue recursively.
-                        let mut visitor = self.with_new_body_and_instance(body, instance);
-                        visitor.visit_body(body);
-                    } else {
-                        // Otherwise, we are unable to verify the purity due to external reference or dynamic dispatch.
-                        self.add_call(FnCallInfo { def_id, arg_tys, call_span: *fn_span, body_span: None, body_checked: false, raw_ptr_deref: false });
-                    }
-                }
+                self.visit_def_id(*def_id, substs, Some(arg_tys), Some(*fn_span));
             } else {
                 self.unhandled_terminators.borrow_mut().push(terminator.to_owned());
             }
@@ -121,6 +63,64 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
 }
 
 impl<'tcx> FnVisitor<'tcx> {
+    pub fn visit_def_id(&mut self,
+                        def_id: hir::def_id::DefId,
+                        substs: ty::subst::SubstsRef<'tcx>,
+                        arg_tys: Option<Vec<ty::Ty<'tcx>>>,
+                        call_span: Option<rustc_span::Span>) {
+        let maybe_instance = ty::Instance::resolve(self.tcx, ty::ParamEnv::reveal_all(), def_id, substs).unwrap();
+        let def_id = match maybe_instance {
+            Some(instance) => {
+                // Introspect all interesting types.
+                match instance.def.def_id_if_not_guaranteed_local_codegen() {
+                    None => { dbg!(instance); }
+                    _ => {}
+                }
+                instance.def_id()
+            }
+            None => { def_id }
+        };
+
+
+        if !self.encountered_def_id(def_id) {
+            if self.tcx.is_const_fn_raw(def_id) {
+                return;
+            }
+
+            if self.tcx.is_mir_available(def_id) {
+                let body = self.tcx.optimized_mir(def_id);
+
+                for (cast_def_id, substs) in get_all_fn_casts(self.tcx, body).into_iter() {
+                    self.visit_def_id(cast_def_id, substs, None, None);
+                }
+
+                self.add_call(FnCallInfo {
+                    def_id,
+                    arg_tys,
+                    call_span,
+                    body_span: Some(body.span),
+                    body_checked: true,
+                    raw_ptr_deref: has_raw_ptr_deref(self.tcx, body),
+                });
+
+                if let Some(instance) = maybe_instance {
+                    // Swap the current instance and body and continue recursively.
+                    let mut visitor = self.with_new_body_and_instance(body, instance);
+                    visitor.visit_body(body);
+                }
+            } else {
+                // Otherwise, we are unable to verify the purity due to external reference or dynamic dispatch.
+                self.add_call(FnCallInfo {
+                    def_id,
+                    arg_tys,
+                    call_span,
+                    body_span: None,
+                    body_checked: false,
+                    raw_ptr_deref: false,
+                });
+            }
+        }
+    }
     pub fn new(tcx: ty::TyCtxt<'tcx>, current_body: &'tcx mir::Body<'tcx>, current_instance: ty::Instance<'tcx>) -> Self {
         Self {
             tcx,

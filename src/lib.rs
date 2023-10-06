@@ -2,7 +2,7 @@
 
 mod fn_visitor;
 mod raw_ptr_deref_visitor;
-mod uncast_visitor;
+mod fn_cast_visitor;
 
 use crate::fn_visitor::FnVisitor;
 
