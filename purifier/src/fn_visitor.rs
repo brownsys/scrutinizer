@@ -90,9 +90,9 @@ impl<'tcx> FnVisitor<'tcx> {
             if self.tcx.is_mir_available(def_id) {
                 let body = self.tcx.optimized_mir(def_id);
 
-                for (cast_def_id, substs) in get_all_fn_casts(self.tcx, body).into_iter() {
-                    self.visit_def_id(cast_def_id, substs, None, None);
-                }
+                // for (cast_def_id, substs) in get_all_fn_casts(self.tcx, body).into_iter() {
+                //     self.visit_def_id(cast_def_id, substs, None, None);
+                // }
 
                 self.add_call(FnCallInfo {
                     def_id,

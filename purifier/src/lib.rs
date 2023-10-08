@@ -19,7 +19,6 @@ use clap::Parser;
 use rustc_hir as hir;
 use rustc_middle::mir as mir;
 use rustc_middle::ty as ty;
-
 use rustc_middle::mir::visit::Visitor;
 
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
@@ -28,32 +27,29 @@ use serde::{Deserialize, Serialize};
 
 // This struct is the plugin provided to the rustc_plugin framework,
 // and it must be exported for use by the CLI/driver binaries.
-pub struct PureFuncPlugin;
+pub struct PurifierPlugin;
 
-// To parse CLI arguments, we use Clap for this example. But that
-// detail is up to you.
+// To parse CLI arguments, we use Clap.
 #[derive(Parser, Serialize, Deserialize)]
-pub struct PureFuncPluginArgs {
+pub struct PurifierPluginArgs {
     #[arg(short, long)]
     function: String,
 }
 
-impl RustcPlugin for PureFuncPlugin {
-    type Args = PureFuncPluginArgs;
+impl RustcPlugin for PurifierPlugin {
+    type Args = PurifierPluginArgs;
 
     fn version(&self) -> Cow<'static, str> {
         env!("CARGO_PKG_VERSION").into()
     }
 
     fn driver_name(&self) -> Cow<'static, str> {
-        "pure-func-driver".into()
+        "purifier-driver".into()
     }
 
     // In the CLI, we ask Clap to parse arguments and also specify a CrateFilter.
-    // If one of the CLI arguments was a specific file to analyze, then you
-    // could provide a different filter.
     fn args(&self, _target_dir: &Utf8Path) -> RustcPluginArgs<Self::Args> {
-        let args = PureFuncPluginArgs::parse_from(env::args().skip(1));
+        let args = PurifierPluginArgs::parse_from(env::args().skip(1));
         let filter = CrateFilter::AllCrates;
         RustcPluginArgs { args, filter }
     }
@@ -65,17 +61,17 @@ impl RustcPlugin for PureFuncPlugin {
         compiler_args: Vec<String>,
         plugin_args: Self::Args,
     ) -> rustc_interface::interface::Result<()> {
-        let mut callbacks = PureFuncCallbacks { args: plugin_args };
+        let mut callbacks = PurifierCallbacks { args: plugin_args };
         let compiler = rustc_driver::RunCompiler::new(&compiler_args, &mut callbacks);
         compiler.run()
     }
 }
 
-struct PureFuncCallbacks {
-    args: PureFuncPluginArgs,
+struct PurifierCallbacks {
+    args: PurifierPluginArgs,
 }
 
-impl rustc_driver::Callbacks for PureFuncCallbacks {
+impl rustc_driver::Callbacks for PurifierCallbacks {
     // At the top-level, the Rustc API uses an event-based interface for
     // accessing the compiler at different stages of compilation. In this callback,
     // all the type-checking has completed.
@@ -84,23 +80,17 @@ impl rustc_driver::Callbacks for PureFuncCallbacks {
         _compiler: &rustc_interface::interface::Compiler,
         queries: &'tcx rustc_interface::Queries<'tcx>,
     ) -> rustc_driver::Compilation {
-        // We extract a key data structure, the `TyCtxt`, which is all we need
-        // for our simple task of printing out item names.
         queries
             .global_ctxt()
             .unwrap()
-            .enter(|tcx| pure_func(tcx, &self.args));
+            .enter(|tcx| purifier(tcx, &self.args));
 
-        // Note that you should generally allow compilation to continue. If
-        // your plugin is being invoked on a dependency, then you need to ensure
-        // the dependency is type-checked (its .rmeta file is emitted into target/)
-        // so that its dependents can read the compiler outputs.
         rustc_driver::Compilation::Continue
     }
 }
 
 // The entry point of analysis.
-fn pure_func(tcx: ty::TyCtxt, args: &PureFuncPluginArgs) {
+fn purifier(tcx: ty::TyCtxt, args: &PurifierPluginArgs) {
     let hir = tcx.hir();
     for item_id in hir.items() {
         let item = hir.item(item_id);

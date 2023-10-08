@@ -1,0 +1,17 @@
+[package]
+name = "vartrack"
+version = "0.1.0"
+edition = "2021"
+
+[package.metadata.rust-analyzer]
+rustc_private = true
+
+[dependencies]
+rustc_plugin = "=0.6.0-nightly-2023-04-12"
+rustc_utils = "=0.6.0-nightly-2023-04-12"
+env_logger = "0.10"
+clap = {version = "4", features = ["derive"]}
+serde = {version = "1", features = ["derive"]}
+regex = "1.9.1"
+flowistry = "=0.5.36"
+textwrap = {version = "0.14", default-features = false}

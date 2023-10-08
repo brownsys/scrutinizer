@@ -60,6 +60,11 @@ pub fn vec_len(vec: &Vec<usize>) -> usize {
     vec.len()
 }
 
+pub fn vec_push(mut vec: Vec<usize>) -> Vec<usize> {
+    vec.push(0);
+    vec
+}
+
 pub unsafe fn vec_from_raw_parts(
     ptr: *mut usize,
     length: usize,
