@@ -1,17 +1,3 @@
-//! A basic example that shows how to invoke rustc and use Flowistry to compute
-//! information flows. It takes a source file with one function, and prints out
-//! the forward dependencies of the first argument in that function.
-//!
-//! To run it from the Flowistry workspace, do:
-//! ```bash
-//! echo "fn example(x: i32) {
-//!  let mut y = 1;
-//!  if x > 0 { y = 2; }
-//!  let z = 3;
-//! }" > test.rs
-//! cargo run --example example -- test.rs
-//! ```
-
 #![feature(rustc_private)]
 
 extern crate rustc_borrowck;
@@ -22,7 +8,9 @@ extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_span;
 
-use std::process::Command;
+use clap::Parser;
+use serde::{Deserialize, Serialize};
+use std::{borrow::Cow, env};
 
 use flowistry::{indexed::impls::LocationOrArg, infoflow::Direction};
 use rustc_borrowck::BodyWithBorrowckFacts;
@@ -37,6 +25,45 @@ use rustc_utils::{
     source_map::spanner::{EnclosingHirSpans, Spanner},
     BodyExt, PlaceExt, SpanExt,
 };
+
+use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
+
+pub struct VartrackPlugin;
+
+// To parse CLI arguments, we use Clap.
+#[derive(Parser, Serialize, Deserialize)]
+pub struct VartrackPluginArgs {
+    #[arg(short, long)]
+    function: String,
+}
+
+impl RustcPlugin for VartrackPlugin {
+    type Args = VartrackPluginArgs;
+
+    fn version(&self) -> Cow<'static, str> {
+        env!("CARGO_PKG_VERSION").into()
+    }
+
+    fn driver_name(&self) -> Cow<'static, str> {
+        "vartrack-driver".into()
+    }
+
+    fn args(&self, _target_dir: &Utf8Path) -> RustcPluginArgs<Self::Args> {
+        let args = VartrackPluginArgs::parse_from(env::args().skip(1));
+        let filter = CrateFilter::AllCrates;
+        RustcPluginArgs { args, filter }
+    }
+
+    fn run(
+        self,
+        compiler_args: Vec<String>,
+        plugin_args: Self::Args,
+    ) -> rustc_interface::interface::Result<()> {
+        let mut callbacks = VartrackCallbacks { args: plugin_args };
+        let compiler = rustc_driver::RunCompiler::new(&compiler_args, &mut callbacks);
+        compiler.run()
+    }
+}
 
 // This is the core analysis. Everything below this function is plumbing to
 // call into rustc's API.
@@ -88,8 +115,11 @@ fn compute_dependencies<'tcx>(
     }
 }
 
-struct Callbacks;
-impl rustc_driver::Callbacks for Callbacks {
+struct VartrackCallbacks {
+    args: VartrackPluginArgs,
+}
+
+impl rustc_driver::Callbacks for VartrackCallbacks {
     fn config(&mut self, config: &mut rustc_interface::Config) {
         // You MUST configure rustc to ensure `get_body_with_borrowck_facts` will work.
         borrowck_facts::enable_mir_simplification();
@@ -104,12 +134,21 @@ impl rustc_driver::Callbacks for Callbacks {
         queries.global_ctxt().unwrap().enter(|tcx| {
             let hir = tcx.hir();
 
-            // Get the first body we can find
+            // Get the matching body
             let body_id = hir
                 .items()
-                .filter_map(|id| match hir.item(id).kind {
-                    ItemKind::Fn(_, _, body) => Some(body),
-                    _ => None,
+                .filter_map(|id| {
+                    let item = hir.item(id);
+                    match item.kind {
+                        ItemKind::Fn(_, _, body) => {
+                            if item.ident.name == rustc_span::symbol::Symbol::intern(self.args.function.as_str()) {
+                                Some(body)
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
                 })
                 .next()
                 .unwrap();
@@ -121,28 +160,4 @@ impl rustc_driver::Callbacks for Callbacks {
         });
         rustc_driver::Compilation::Stop
     }
-}
-
-fn main() {
-    env_logger::init();
-
-    // Get the sysroot so rustc can find libstd
-    let print_sysroot = Command::new("rustc")
-        .args(&["--print", "sysroot"])
-        .output()
-        .unwrap()
-        .stdout;
-    let sysroot = String::from_utf8(print_sysroot).unwrap().trim().to_owned();
-
-    let mut args = std::env::args().collect::<Vec<_>>();
-    args.extend(["--sysroot".into(), sysroot]);
-
-    // Run rustc with the given arguments
-    let mut callbacks = Callbacks;
-    rustc_driver::catch_fatal_errors(|| {
-        rustc_driver::RunCompiler::new(&args, &mut callbacks)
-            .run()
-            .unwrap()
-    })
-        .unwrap();
 }
