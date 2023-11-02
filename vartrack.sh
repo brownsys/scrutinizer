@@ -1,4 +1,5 @@
 #!/bin/bash
 
+cargo install --locked --path ./vartrack/
 export RUSTFLAGS="$RUSTFLAGS -Zalways-encode-mir -Znll-facts"
-cargo install --locked --path ./vartrack/ && cd $1 && cargo clean && cargo vartrack --function $2
+cd $1 && cargo clean && cargo vartrack --function $2

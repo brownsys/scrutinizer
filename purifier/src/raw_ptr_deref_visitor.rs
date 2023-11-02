@@ -1,4 +1,3 @@
-use rustc_hir as hir;
 use rustc_middle::mir as mir;
 use rustc_middle::ty as ty;
 use rustc_middle::mir::visit::Visitor;

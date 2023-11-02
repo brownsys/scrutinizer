@@ -6,10 +6,8 @@ use std::rc::Rc;
 use rustc_hir as hir;
 use rustc_middle::mir as mir;
 use rustc_middle::ty as ty;
-use rustc_middle::mir::HasLocalDecls;
 use rustc_middle::mir::visit::Visitor;
 
-use crate::fn_cast_visitor::get_all_fn_casts;
 use crate::raw_ptr_deref_visitor::has_raw_ptr_deref;
 
 #[derive(Debug)]

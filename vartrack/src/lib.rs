@@ -1,9 +1,14 @@
 #![feature(rustc_private)]
 
+mod facts;
+mod intern;
+mod tab_delim;
+
 extern crate rustc_borrowck;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_hir;
+extern crate rustc_index;
 extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_span;
@@ -15,11 +20,13 @@ use std::{borrow::Cow, env};
 use flowistry::{indexed::impls::LocationOrArg, infoflow::Direction};
 use rustc_borrowck::BodyWithBorrowckFacts;
 use rustc_hir::{BodyId, ItemKind};
+use rustc_index::vec::IndexVec;
 use rustc_middle::{
-    mir::{Local, Place},
+    dep_graph::DepContext,
+    mir::{BasicBlock, Body, Local, Place},
     ty::TyCtxt,
 };
-use rustc_span::Span;
+use rustc_span::{FileName, Span};
 use rustc_utils::{
     mir::borrowck_facts,
     source_map::spanner::{EnclosingHirSpans, Spanner},
@@ -27,6 +34,16 @@ use rustc_utils::{
 };
 
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
+
+use std::error;
+use std::fmt;
+use std::path::Path;
+
+use polonius_engine::Algorithm;
+use polonius_engine::Output as PoloniusEngineOutput;
+
+use std::mem::transmute;
+use std::rc::Rc;
 
 pub struct VartrackPlugin;
 
@@ -84,12 +101,9 @@ fn compute_dependencies<'tcx>(
     let targets = vec![vec![(arg_place, LocationOrArg::Arg(arg_local))]];
 
     // Then use Flowistry to compute the locations and places influenced by the target.
-    let location_deps = flowistry::infoflow::compute_dependencies(
-        &results,
-        targets.clone(),
-        Direction::Forward,
-    )
-        .remove(0);
+    let location_deps =
+        flowistry::infoflow::compute_dependencies(&results, targets.clone(), Direction::Forward)
+            .remove(0);
 
     // And print out those forward dependencies. Note that while each location has an
     // associated span in the body, i.e. via `body.source_info(location).span`,
@@ -119,6 +133,50 @@ struct VartrackCallbacks {
     args: VartrackPluginArgs,
 }
 
+#[derive(Debug)]
+pub struct Error(String);
+
+impl error::Error for Error {}
+
+impl fmt::Display for Error {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.write_str(&self.0)
+    }
+}
+
+macro_rules! attempt {
+    ($($tokens:tt)*) => {
+        (|| Ok({ $($tokens)* }))()
+    };
+}
+
+pub struct LocationTableShim {
+    num_points: usize,
+    statements_before_block: IndexVec<BasicBlock, usize>,
+}
+
+impl LocationTableShim {
+    pub fn new(body: &Body<'_>) -> Self {
+        let mut num_points = 0;
+        let statements_before_block = body
+            .basic_blocks
+            .iter()
+            .map(|block_data| {
+                let v = num_points;
+                num_points += (block_data.statements.len() + 1) * 2;
+                v
+            })
+            .collect();
+
+        Self {
+            num_points,
+            statements_before_block,
+        }
+    }
+}
+
+type Output = PoloniusEngineOutput<facts::LocalFacts>;
+
 impl rustc_driver::Callbacks for VartrackCallbacks {
     fn config(&mut self, config: &mut rustc_interface::Config) {
         // You MUST configure rustc to ensure `get_body_with_borrowck_facts` will work.
@@ -141,7 +199,9 @@ impl rustc_driver::Callbacks for VartrackCallbacks {
                     let item = hir.item(id);
                     match item.kind {
                         ItemKind::Fn(_, _, body) => {
-                            if item.ident.name == rustc_span::symbol::Symbol::intern(self.args.function.as_str()) {
+                            if item.ident.name
+                                == rustc_span::symbol::Symbol::intern(self.args.function.as_str())
+                            {
                                 Some(body)
                             } else {
                                 None
@@ -154,9 +214,37 @@ impl rustc_driver::Callbacks for VartrackCallbacks {
                 .unwrap();
 
             let def_id = hir.body_owner_def_id(body_id);
-            let body_with_facts = borrowck_facts::get_body_with_borrowck_facts(tcx, def_id);
+            let body = tcx.optimized_mir(def_id).to_owned();
+            let location_table_owned = LocationTableShim::new(&body);
 
-            compute_dependencies(tcx, body_id, body_with_facts)
+            if let FileName::Real(file) = tcx.sess().source_map().span_to_filename(body.span) {
+                let filename = file.local_path_if_available();
+                
+                let facts_dir = "./nll-facts/vartrack-example";
+                let tables = &mut intern::InternerTables::new();
+                let result: Result<(facts::AllFacts, Output), Error> = attempt! {
+                    let all_facts =
+                        tab_delim::load_tab_delimited_facts(tables, &Path::new(&facts_dir))
+                            .map_err(|e| Error(e.to_string()))?;
+                    let algorithm = Algorithm::Hybrid;
+                    let output = Output::compute(&all_facts, algorithm, false);
+                    (all_facts, output)
+                };
+    
+                let (input_facts, output_facts) = result.unwrap();
+    
+                let preloaded_body_with_facts = BodyWithBorrowckFacts {
+                    body,
+                    input_facts: unsafe { transmute(input_facts) },
+                    output_facts: Rc::new(unsafe { transmute(output_facts) }),
+                    location_table: unsafe { transmute(location_table_owned) },
+                };
+    
+                let body_with_facts = borrowck_facts::get_body_with_borrowck_facts(tcx, def_id);
+    
+                compute_dependencies(tcx, body_id, &body_with_facts);
+                compute_dependencies(tcx, body_id, &preloaded_body_with_facts);
+            }
         });
         rustc_driver::Compilation::Stop
     }
