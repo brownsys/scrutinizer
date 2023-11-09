@@ -31,29 +31,29 @@ use serde::{Deserialize, Serialize};
 
 // This struct is the plugin provided to the rustc_plugin framework,
 // and it must be exported for use by the CLI/driver binaries.
-pub struct PurifierPlugin;
+pub struct ScrutinizerPlugin;
 
 // To parse CLI arguments, we use Clap.
 #[derive(Parser, Serialize, Deserialize)]
-pub struct PurifierPluginArgs {
+pub struct ScrutinizerPluginArgs {
     #[arg(short, long)]
     function: String,
 }
 
-impl RustcPlugin for PurifierPlugin {
-    type Args = PurifierPluginArgs;
+impl RustcPlugin for ScrutinizerPlugin {
+    type Args = ScrutinizerPluginArgs;
 
     fn version(&self) -> Cow<'static, str> {
         env!("CARGO_PKG_VERSION").into()
     }
 
     fn driver_name(&self) -> Cow<'static, str> {
-        "purifier-driver".into()
+        "scrutinizer-driver".into()
     }
 
     // In the CLI, we ask Clap to parse arguments and also specify a CrateFilter.
     fn args(&self, _target_dir: &Utf8Path) -> RustcPluginArgs<Self::Args> {
-        let args = PurifierPluginArgs::parse_from(env::args().skip(1));
+        let args = ScrutinizerPluginArgs::parse_from(env::args().skip(1));
         let filter = CrateFilter::AllCrates;
         RustcPluginArgs { args, filter }
     }
@@ -65,17 +65,17 @@ impl RustcPlugin for PurifierPlugin {
         compiler_args: Vec<String>,
         plugin_args: Self::Args,
     ) -> rustc_interface::interface::Result<()> {
-        let mut callbacks = PurifierCallbacks { args: plugin_args };
+        let mut callbacks = ScrutinizerCallbacks { args: plugin_args };
         let compiler = rustc_driver::RunCompiler::new(&compiler_args, &mut callbacks);
         compiler.run()
     }
 }
 
-struct PurifierCallbacks {
-    args: PurifierPluginArgs,
+struct ScrutinizerCallbacks {
+    args: ScrutinizerPluginArgs,
 }
 
-impl rustc_driver::Callbacks for PurifierCallbacks {
+impl rustc_driver::Callbacks for ScrutinizerCallbacks {
     // At the top-level, the Rustc API uses an event-based interface for
     // accessing the compiler at different stages of compilation. In this callback,
     // all the type-checking has completed.
@@ -87,14 +87,14 @@ impl rustc_driver::Callbacks for PurifierCallbacks {
         queries
             .global_ctxt()
             .unwrap()
-            .enter(|tcx| purifier(tcx, &self.args));
+            .enter(|tcx| scrutinizer(tcx, &self.args));
 
         rustc_driver::Compilation::Continue
     }
 }
 
 // The entry point of analysis.
-fn purifier(tcx: ty::TyCtxt, args: &PurifierPluginArgs) {
+fn scrutinizer(tcx: ty::TyCtxt, args: &ScrutinizerPluginArgs) {
     let hir = tcx.hir();
     for item_id in hir.items() {
         let item = hir.item(item_id);

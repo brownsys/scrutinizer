@@ -1,4 +1,4 @@
-# pure-func
+# scrutinizer
 
 This analyzer uses `nightly-2023-04-12` as its base toolchain.
 

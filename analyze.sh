@@ -1,5 +1,5 @@
 #!/bin/bash
 
-cargo install --locked --path ./purifier/
+cargo install --locked --path ./scrutinizer/
 export RUSTFLAGS="$RUSTFLAGS -Zalways-encode-mir -Znll-facts"
-cd $1 && cargo clean && cargo purifier --function $2
+cd $1 && cargo clean && cargo scrutinizer --function $2

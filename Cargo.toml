@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "purifier",
+    "scrutinizer",
 ]
 exclude = [
     "test-crate",
