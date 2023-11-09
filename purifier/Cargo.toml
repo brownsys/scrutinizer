@@ -7,10 +7,22 @@ edition = "2021"
 rustc_private = true
 
 [dependencies]
+# rustc plugin
 rustc_plugin = "=0.6.0-nightly-2023-04-12"
 rustc_utils = "=0.6.0-nightly-2023-04-12"
-env_logger = "0.10"
-clap = {version = "4", features = ["derive"]}
-serde = {version = "1", features = ["derive"]}
-regex = "1.9.1"
+
+# flowistry
 flowistry = "=0.5.36"
+
+# miscellaneous
+clap = {version = "4", features = ["derive"]}
+env_logger = "0.10"
+regex = "1.9.1"
+serde = {version = "1", features = ["derive"]}
+textwrap = {version = "0.14", default-features = false}
+
+# polonius-specific dependencies
+polonius-engine = "=0.13.0"
+log = "0.4"
+rustc-hash = "1.0.0"
+petgraph = "0.4.13"

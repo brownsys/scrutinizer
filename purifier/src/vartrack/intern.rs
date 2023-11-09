@@ -4,33 +4,23 @@ use std::collections::HashMap;
 
 /// When we load facts out of the table, they are essentially random
 /// strings. We create an intern table to map those to small integers.
-pub(crate) struct Interner<TargetType: From<usize> + Copy> {
-    strings: FxHashMap<String, TargetType>,
-    rev_strings: Vec<String>,
+pub struct Interner<TargetType: From<usize> + Copy> {
+    pub strings: FxHashMap<String, TargetType>,
+    pub rev_strings: Vec<String>,
 }
 
 impl<TargetType> Interner<TargetType>
 where
     TargetType: From<usize> + Into<usize> + Copy,
 {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             strings: HashMap::default(),
             rev_strings: vec![],
         }
     }
 
-    pub(crate) fn untern(&self, data: TargetType) -> &str {
-        let data: usize = data.into();
-        &self.rev_strings[data]
-    }
-
-    #[cfg(test)]
-    pub(crate) fn untern_vec(&self, data: &[TargetType]) -> Vec<&str> {
-        data.into_iter().map(|d| self.untern(*d)).collect()
-    }
-
-    pub(crate) fn intern(&mut self, data: &str) -> TargetType {
+    pub fn intern(&mut self, data: &str) -> TargetType {
         if let Some(&interned) = self.strings.get(data) {
             return interned;
         }
@@ -41,16 +31,16 @@ where
     }
 }
 
-pub(crate) struct InternerTables {
-    pub(crate) origins: Interner<Origin>,
-    pub(crate) loans: Interner<Loan>,
-    pub(crate) points: Interner<Point>,
-    pub(crate) variables: Interner<Variable>,
-    pub(crate) paths: Interner<Path>,
+pub struct InternerTables {
+    pub origins: Interner<Origin>,
+    pub loans: Interner<Loan>,
+    pub points: Interner<Point>,
+    pub variables: Interner<Variable>,
+    pub paths: Interner<Path>,
 }
 
 impl InternerTables {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             origins: Interner::new(),
             loans: Interner::new(),
@@ -61,7 +51,7 @@ impl InternerTables {
     }
 }
 
-pub(crate) trait InternTo<To> {
+pub trait InternTo<To> {
     fn intern(tables: &mut InternerTables, input: Self) -> To;
 }
 

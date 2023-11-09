@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "purifier",
-    "vartrack",
 ]
 exclude = [
     "test-crate",

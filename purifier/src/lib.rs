@@ -1,13 +1,16 @@
 #![feature(rustc_private)]
 
-mod fn_visitor;
-mod raw_ptr_deref_visitor;
-mod fn_cast_visitor;
+mod vartrack;
+mod visitors;
 
-use crate::fn_visitor::FnVisitor;
+use vartrack::compute_dependencies;
+use visitors::FnVisitor;
 
+extern crate rustc_borrowck;
+extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_hir;
+extern crate rustc_index;
 extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_span;
@@ -17,9 +20,10 @@ use std::{borrow::Cow, env};
 use clap::Parser;
 
 use rustc_hir as hir;
-use rustc_middle::mir as mir;
-use rustc_middle::ty as ty;
+use rustc_middle::mir;
 use rustc_middle::mir::visit::Visitor;
+use rustc_middle::mir::Local;
+use rustc_middle::ty;
 
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
 
@@ -101,9 +105,17 @@ fn purifier(tcx: ty::TyCtxt, args: &PurifierPluginArgs) {
 
             if let hir::ItemKind::Fn(fn_sig, _, _) = &item.kind {
                 let main_body = tcx.optimized_mir(def_id);
+
+                let sensitive_arg = Local::from_usize(1);
+                let deps = compute_dependencies(tcx, def_id, sensitive_arg);
+                dbg!(deps.clone());
+
                 let main_instance = ty::Instance::mono(tcx, def_id);
 
-                println!("--> Checking for mutable reference params in {}...", args.function);
+                println!(
+                    "--> Checking for mutable reference params in {}...",
+                    args.function
+                );
                 let mutable = fn_sig.decl.inputs.iter().any(|arg| {
                     if let hir::TyKind::Ref(_, mut_ty) = &arg.kind {
                         if mut_ty.mutbl == mir::Mutability::Mut {
@@ -119,7 +131,7 @@ fn purifier(tcx: ty::TyCtxt, args: &PurifierPluginArgs) {
 
                 println!("--> Performing call tree traversal...");
 
-                let mut visitor = FnVisitor::new(tcx, main_body, main_instance);
+                let mut visitor = FnVisitor::new(tcx, main_body, main_instance, deps);
                 // Begin the traversal.
                 visitor.visit_body(main_body);
                 // Show all checked bodies encountered.
@@ -131,7 +143,11 @@ fn purifier(tcx: ty::TyCtxt, args: &PurifierPluginArgs) {
                 // Show all unhandled terminators encountered.
                 println!("--> Dumping all unhandled terminators:");
                 visitor.dump_unhandled_terminators();
-                println!("--> Body purity check result for function {}: {}", args.function, visitor.check_purity());
+                println!(
+                    "--> Body purity check result for function {}: {}",
+                    args.function,
+                    visitor.check_purity()
+                );
             }
         }
     }

@@ -1,14 +1,14 @@
 use polonius_engine::{self, FactTypes};
 
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct LocalFacts;
+pub struct LocalFacts;
 
-pub(crate) type AllFacts = polonius_engine::AllFacts<LocalFacts>;
+pub type AllFacts = polonius_engine::AllFacts<LocalFacts>;
 
 macro_rules! index_type {
     ($t:ident) => {
         #[derive(Ord, PartialOrd, Eq, PartialEq, Clone, Copy, Debug, Hash)]
-        pub(crate) struct $t {
+        pub struct $t {
             index: u32,
         }
 

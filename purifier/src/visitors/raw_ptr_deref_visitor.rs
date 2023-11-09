@@ -1,6 +1,6 @@
-use rustc_middle::mir as mir;
-use rustc_middle::ty as ty;
+use rustc_middle::mir;
 use rustc_middle::mir::visit::Visitor;
+use rustc_middle::ty;
 
 struct RawPtrDerefVisitor<'tcx> {
     tcx: ty::TyCtxt<'tcx>,
@@ -8,8 +8,11 @@ struct RawPtrDerefVisitor<'tcx> {
     has_raw_ptr_deref: bool,
 }
 
-fn place_has_raw_ptr_deref<'tcx>(place: &mir::Place<'tcx>, tcx: ty::TyCtxt<'tcx>,
-                                 body: &'tcx mir::Body<'tcx>) -> bool {
+fn place_has_raw_ptr_deref<'tcx>(
+    place: &mir::Place<'tcx>,
+    tcx: ty::TyCtxt<'tcx>,
+    body: &'tcx mir::Body<'tcx>,
+) -> bool {
     place.iter_projections().any(|(place_ref, _)| {
         let ty = place_ref.ty(body, tcx).ty;
         ty.is_unsafe_ptr() && ty.is_mutable_ptr()
@@ -39,7 +42,11 @@ impl<'tcx> mir::visit::Visitor<'tcx> for RawPtrDerefVisitor<'tcx> {
 }
 
 pub fn has_raw_ptr_deref<'tcx>(tcx: ty::TyCtxt<'tcx>, body: &'tcx mir::Body<'tcx>) -> bool {
-    let mut ptr_deref_visitor = RawPtrDerefVisitor { tcx, body, has_raw_ptr_deref: false };
+    let mut ptr_deref_visitor = RawPtrDerefVisitor {
+        tcx,
+        body,
+        has_raw_ptr_deref: false,
+    };
     ptr_deref_visitor.visit_body(body);
     ptr_deref_visitor.has_raw_ptr_deref
 }
