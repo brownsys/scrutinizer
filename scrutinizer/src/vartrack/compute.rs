@@ -10,6 +10,7 @@ use flowistry::{
 
 use rustc_borrowck::BodyWithBorrowckFacts;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
+// use rustc_hir::{BodyId, ItemKind};
 use rustc_index::vec::IndexVec;
 use rustc_middle::{
     dep_graph::DepContext,
@@ -17,7 +18,8 @@ use rustc_middle::{
     ty::TyCtxt,
 };
 
-use rustc_utils::PlaceExt;
+// use rustc_utils::mir::borrowck_facts::get_body_with_borrowck_facts;
+use rustc_utils::{BodyExt, PlaceExt};
 
 use std::error;
 use std::fmt;
@@ -81,6 +83,7 @@ pub fn compute_dependencies<'tcx>(
     arg_local: Local,
 ) -> LocationOrArgSet {
     let body = tcx.optimized_mir(def_id).to_owned();
+    println!("Body:\n{}", body.to_string(tcx).unwrap());
 
     let location_table = LocationTableShim::new(&body);
     let nll_filename = tcx.def_path(def_id).to_filename_friendly_no_crate();
@@ -113,6 +116,8 @@ pub fn compute_dependencies<'tcx>(
         location_table: unsafe { transmute(location_table) },
     };
 
+    // let body_with_facts = get_body_with_borrowck_facts(tcx, def_id.as_local().unwrap());
+
     let aliases = Aliases::build(tcx, def_id, &body_with_facts);
     let location_domain = aliases.location_domain().clone();
 
@@ -125,9 +130,29 @@ pub fn compute_dependencies<'tcx>(
     let arg_place = Place::make(arg_local, &[], tcx);
     let targets = vec![vec![(arg_place, LocationOrArg::Arg(arg_local))]];
 
+    // let hir = tcx.hir();
+
+    // // Get the first body we can find
+    // let body_id = hir
+    //     .items()
+    //     .filter_map(|id| match hir.item(id).kind {
+    //         ItemKind::Fn(_, _, body) => Some(body),
+    //         _ => None,
+    //     })
+    //     .next()
+    //     .unwrap();
+
+    // let results = flowistry::infoflow::compute_flow(tcx, body_id, body_with_facts);
+
     // Then use Flowistry to compute the locations and places influenced by the target.
     let location_deps =
         flowistry::infoflow::compute_dependencies(&results, targets.clone(), Direction::Forward)
-            .remove(0);
+            .into_iter()
+            .reduce(|acc, e| {
+                let mut new_acc = acc.clone();
+                new_acc.union(&e);
+                new_acc
+            })
+            .unwrap();
     location_deps
 }

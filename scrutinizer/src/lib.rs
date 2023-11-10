@@ -26,6 +26,7 @@ use rustc_middle::mir::Local;
 use rustc_middle::ty;
 
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
+// use rustc_utils::mir::borrowck_facts;
 
 use serde::{Deserialize, Serialize};
 
@@ -76,6 +77,11 @@ struct ScrutinizerCallbacks {
 }
 
 impl rustc_driver::Callbacks for ScrutinizerCallbacks {
+    // fn config(&mut self, config: &mut rustc_interface::Config) {
+    //     // You MUST configure rustc to ensure `get_body_with_borrowck_facts` will work.
+    //     borrowck_facts::enable_mir_simplification();
+    //     config.override_queries = Some(borrowck_facts::override_queries);
+    // }
     // At the top-level, the Rustc API uses an event-based interface for
     // accessing the compiler at different stages of compilation. In this callback,
     // all the type-checking has completed.
@@ -108,7 +114,7 @@ fn scrutinizer(tcx: ty::TyCtxt, args: &ScrutinizerPluginArgs) {
 
                 let sensitive_arg = Local::from_usize(1);
                 let deps = compute_dependencies(tcx, def_id, sensitive_arg);
-                dbg!(deps.clone());
+                dbg!(&deps);
 
                 let main_instance = ty::Instance::mono(tcx, def_id);
 

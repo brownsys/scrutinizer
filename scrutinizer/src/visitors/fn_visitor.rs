@@ -6,8 +6,7 @@ use std::rc::Rc;
 
 use rustc_hir as hir;
 use rustc_middle::mir;
-use rustc_middle::mir::visit::Visitor;
-use rustc_middle::mir::Local;
+use rustc_middle::mir::{visit::Visitor, Local, StatementKind};
 use rustc_middle::ty;
 
 use super::super::vartrack::compute_dependencies;
@@ -65,7 +64,18 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                     .current_deps
                     .iter()
                     .filter_map(|dep| match dep {
-                        LocationOrArg::Location(_) => None,
+                        LocationOrArg::Location(location) => self
+                            .current_body
+                            .stmt_at(*location)
+                            .left()
+                            .and_then(|stmt| {
+                                if let StatementKind::Assign(assign) = stmt.kind.clone() {
+                                    let (place, _) = *assign;
+                                    Some(place.local)
+                                } else {
+                                    None
+                                }
+                            }),
                         LocationOrArg::Arg(local) => Some(*local),
                     })
                     .collect::<Vec<_>>();
