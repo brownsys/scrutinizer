@@ -2,4 +2,4 @@
 
 cargo install --locked --path ./scrutinizer/
 export RUSTFLAGS="$RUSTFLAGS -Zalways-encode-mir -Znll-facts"
-cd $1 && cargo clean && cargo scrutinizer --function $2
+cd $1 && cargo clean && cargo scrutinizer --function $2 --important-args $3

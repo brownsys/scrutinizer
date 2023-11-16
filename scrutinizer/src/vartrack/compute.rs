@@ -2,52 +2,30 @@ use super::facts;
 use super::intern;
 use super::tab_delim;
 
+use rustc_borrowck::BodyWithBorrowckFacts;
+use rustc_hir::def_id::{DefId, LOCAL_CRATE};
+use rustc_index::vec::IndexVec;
+use rustc_middle::{
+    dep_graph::DepContext,
+    mir::{BasicBlock, Body, Local, Place, StatementKind, TerminatorKind},
+    ty::TyCtxt,
+};
+use rustc_utils::{BodyExt, PlaceExt};
+
+use std::mem::transmute;
+use std::path::Path;
+use std::rc::Rc;
+
 use flowistry::{
-    indexed::impls::{LocationOrArg, LocationOrArgSet},
+    indexed::impls::LocationOrArg,
     infoflow::{Direction, FlowAnalysis},
     mir::{aliases::Aliases, engine},
 };
 
-use rustc_borrowck::BodyWithBorrowckFacts;
-use rustc_hir::def_id::{DefId, LOCAL_CRATE};
-// use rustc_hir::{BodyId, ItemKind};
-use rustc_index::vec::IndexVec;
-use rustc_middle::{
-    dep_graph::DepContext,
-    mir::{BasicBlock, Body, Local, Place},
-    ty::TyCtxt,
-};
-
-// use rustc_utils::mir::borrowck_facts::get_body_with_borrowck_facts;
-use rustc_utils::{BodyExt, PlaceExt};
-
-use std::error;
-use std::fmt;
-use std::path::Path;
-
 use polonius_engine::Algorithm;
 use polonius_engine::Output as PoloniusEngineOutput;
 
-use std::mem::transmute;
-use std::rc::Rc;
-
-#[derive(Debug)]
-pub struct Error(String);
-
-impl error::Error for Error {}
-
-impl fmt::Display for Error {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt.write_str(&self.0)
-    }
-}
-
-macro_rules! attempt {
-    ($($tokens:tt)*) => {
-        (|| Ok({ $($tokens)* }))()
-    };
-}
-
+// This is needed to interoperate with rustc's LocationTable, which is pub(crate) by default.
 pub struct LocationTableShim {
     num_points: usize,
     statements_before_block: IndexVec<BasicBlock, usize>,
@@ -75,40 +53,44 @@ impl LocationTableShim {
 
 pub type Output = PoloniusEngineOutput<facts::LocalFacts>;
 
-// This is the core analysis. Everything below this function is plumbing to
-// call into rustc's API.
-pub fn compute_dependencies<'tcx>(
+// This function computes all locals that depend on the argument local for a given def_id.
+pub fn compute_dependent_locals<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
-    arg_local: Local,
-) -> LocationOrArgSet {
+    arg_locals: Vec<Local>,
+) -> Vec<Local> {
+    // Retrieve optimized MIR body.
+    // For foreign crate items, it would be saved during the crate's compilation.
     let body = tcx.optimized_mir(def_id).to_owned();
     println!("Body:\n{}", body.to_string(tcx).unwrap());
 
+    // Create the shimmed LocationTable, which is identical to the original LocationTable.
     let location_table = LocationTableShim::new(&body);
-    let nll_filename = tcx.def_path(def_id).to_filename_friendly_no_crate();
 
-    // TODO: this is really brittle, can we get this info somehow differently?
-    let facts_dir = if def_id.krate == LOCAL_CRATE {
-        format!("./nll-facts/{}", nll_filename)
-    } else {
-        let diagnostic_string = tcx.sess().source_map().span_to_diagnostic_string(body.span);
-        let split_path = diagnostic_string.rsplit_once("/src").unwrap();
-        format!("{}/nll-facts/{}", split_path.0, nll_filename)
+    // Find the directory with precomputed borrow checker facts for a given DefId.
+    // TODO: this mechanism is quite brittle, need a more robust approach.
+    let facts_dir = {
+        let nll_filename = tcx.def_path(def_id).to_filename_friendly_no_crate();
+        if def_id.krate == LOCAL_CRATE {
+            format!("./nll-facts/{}", nll_filename)
+        } else {
+            let diagnostic_string = tcx.sess().source_map().span_to_diagnostic_string(body.span);
+            let split_path = diagnostic_string.rsplit_once("/src").unwrap();
+            format!("{}/nll-facts/{}", split_path.0, nll_filename)
+        }
     };
 
-    let tables = &mut intern::InternerTables::new();
-    let polonius_result: Result<(facts::AllFacts, Output), Error> = attempt! {
+    // Run polonius on the borrow checker facts.
+    let (input_facts, output_facts) = {
+        let tables = &mut intern::InternerTables::new();
         let all_facts =
-            tab_delim::load_tab_delimited_facts(tables, &Path::new(&facts_dir))
-                .map_err(|e| Error(e.to_string()))?;
+            tab_delim::load_tab_delimited_facts(tables, &Path::new(&facts_dir)).unwrap();
         let algorithm = Algorithm::Hybrid;
         let output = Output::compute(&all_facts, algorithm, false);
         (all_facts, output)
     };
 
-    let (input_facts, output_facts) = polonius_result.unwrap();
-
+    // Construct a body with borrow checker facts required for Flowistry.
     let body_with_facts = BodyWithBorrowckFacts {
         body,
         input_facts: unsafe { transmute(input_facts) },
@@ -116,35 +98,24 @@ pub fn compute_dependencies<'tcx>(
         location_table: unsafe { transmute(location_table) },
     };
 
-    // let body_with_facts = get_body_with_borrowck_facts(tcx, def_id.as_local().unwrap());
-
-    let aliases = Aliases::build(tcx, def_id, &body_with_facts);
-    let location_domain = aliases.location_domain().clone();
-
+    // Run analysis on the body with with borrow checker facts.
     let results = {
+        let aliases = Aliases::build(tcx, def_id, &body_with_facts);
+        let location_domain = aliases.location_domain().clone();
         let analysis = FlowAnalysis::new(tcx, def_id, &body_with_facts.body, aliases);
         engine::iterate_to_fixpoint(tcx, &body_with_facts.body, location_domain, analysis)
     };
 
-    // We construct a target of the argument at the start of the function.
-    let arg_place = Place::make(arg_local, &[], tcx);
-    let targets = vec![vec![(arg_place, LocationOrArg::Arg(arg_local))]];
+    // Construct targets of the arguments.
+    let targets = vec![arg_locals
+        .into_iter()
+        .map(|arg_local| {
+            let arg_place = Place::make(arg_local, &[], tcx);
+            return (arg_place, LocationOrArg::Arg(arg_local));
+        })
+        .collect::<Vec<_>>()];
 
-    // let hir = tcx.hir();
-
-    // // Get the first body we can find
-    // let body_id = hir
-    //     .items()
-    //     .filter_map(|id| match hir.item(id).kind {
-    //         ItemKind::Fn(_, _, body) => Some(body),
-    //         _ => None,
-    //     })
-    //     .next()
-    //     .unwrap();
-
-    // let results = flowistry::infoflow::compute_flow(tcx, body_id, body_with_facts);
-
-    // Then use Flowistry to compute the locations and places influenced by the target.
+    // Use Flowistry to compute the locations and places influenced by the target.
     let location_deps =
         flowistry::infoflow::compute_dependencies(&results, targets.clone(), Direction::Forward)
             .into_iter()
@@ -154,5 +125,33 @@ pub fn compute_dependencies<'tcx>(
                 new_acc
             })
             .unwrap();
+
+    // Merge location dependencies and extract locals from them.
     location_deps
+        .iter()
+        .filter_map(|dep| match dep {
+            LocationOrArg::Location(location) => {
+                let stmt_or_terminator = body_with_facts.body.stmt_at(*location);
+                if stmt_or_terminator.is_left() {
+                    stmt_or_terminator.left().and_then(|stmt| {
+                        if let StatementKind::Assign(assign) = &stmt.kind {
+                            let (place, _) = **assign;
+                            Some(place.local)
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    stmt_or_terminator.right().and_then(|terminator| {
+                        if let TerminatorKind::Call { destination, .. } = &terminator.kind {
+                            Some(destination.local)
+                        } else {
+                            None
+                        }
+                    })
+                }
+            }
+            LocationOrArg::Arg(local) => Some(*local),
+        })
+        .collect()
 }

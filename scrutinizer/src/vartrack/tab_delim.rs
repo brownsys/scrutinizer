@@ -1,5 +1,6 @@
 use super::facts::AllFacts;
 use super::intern::{InternTo, InternerTables};
+
 use log::error;
 use std::fs::File;
 use std::io::{self, prelude::*};
@@ -55,7 +56,10 @@ pub fn load_tab_delimited_facts(
     }
 }
 
-pub fn load_tab_delimited_file<Row>(tables: &mut InternerTables, path: &Path) -> io::Result<Vec<Row>>
+pub fn load_tab_delimited_file<Row>(
+    tables: &mut InternerTables,
+    path: &Path,
+) -> io::Result<Vec<Row>>
 where
     Row: for<'input> FromTabDelimited<'input>,
 {

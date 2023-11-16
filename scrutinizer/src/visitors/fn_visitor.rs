@@ -1,4 +1,3 @@
-use flowistry::indexed::impls::{LocationOrArg, LocationOrArgSet};
 use regex::Regex;
 
 use std::cell::RefCell;
@@ -6,10 +5,10 @@ use std::rc::Rc;
 
 use rustc_hir as hir;
 use rustc_middle::mir;
-use rustc_middle::mir::{visit::Visitor, Local, StatementKind};
+use rustc_middle::mir::{visit::Visitor, Local};
 use rustc_middle::ty;
 
-use super::super::vartrack::compute_dependencies;
+use super::super::vartrack::compute_dependent_locals;
 use super::raw_ptr_deref_visitor::has_raw_ptr_deref;
 
 #[derive(Debug)]
@@ -31,7 +30,7 @@ pub struct FnVisitor<'tcx> {
     unhandled_terminators: Rc<RefCell<Vec<mir::Terminator<'tcx>>>>,
     current_body: &'tcx mir::Body<'tcx>,
     current_instance: ty::Instance<'tcx>,
-    current_deps: LocationOrArgSet,
+    current_deps: Vec<Local>,
 }
 
 impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
@@ -59,36 +58,15 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                     .map(|arg| arg.ty(self.current_body, self.tcx))
                     .collect::<Vec<_>>();
 
-                // Filter our all non-arguments.
-                let dep_locals = self
-                    .current_deps
-                    .iter()
-                    .filter_map(|dep| match dep {
-                        LocationOrArg::Location(location) => self
-                            .current_body
-                            .stmt_at(*location)
-                            .left()
-                            .and_then(|stmt| {
-                                if let StatementKind::Assign(assign) = stmt.kind.clone() {
-                                    let (place, _) = *assign;
-                                    Some(place.local)
-                                } else {
-                                    None
-                                }
-                            }),
-                        LocationOrArg::Arg(local) => Some(*local),
-                    })
-                    .collect::<Vec<_>>();
-
                 // Select all arguments that appear in this function call.
-                let important_args = args
+                let important_args: Vec<usize> = args
                     .iter()
                     .enumerate()
                     .filter_map(|(i, arg)| {
                         arg.place()
                             .and_then(|place| place.as_local())
                             .and_then(|local| {
-                                if dep_locals.contains(&local) {
+                                if self.current_deps.contains(&local) {
                                     // Need to add 1 because arguments' locals start with 1.
                                     Some(i + 1)
                                 } else {
@@ -96,7 +74,7 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                                 }
                             })
                     })
-                    .collect::<Vec<_>>();
+                    .collect();
 
                 dbg!(&important_args);
 
@@ -147,8 +125,8 @@ impl<'tcx> FnVisitor<'tcx> {
             None => def_id,
         };
 
-        // TODO: this is no longer valid, think about handling recursive call chains.
         // Only if we have not seen this call before.
+        // TODO: this is no longer valid, think about handling recursive call chains.
         if !self.encountered_def_id(def_id) {
             if self.tcx.is_const_fn_raw(def_id) {
                 return;
@@ -158,18 +136,14 @@ impl<'tcx> FnVisitor<'tcx> {
                 let body = self.tcx.optimized_mir(def_id);
 
                 // Compute new dependencies for all important args.
-                let deps = important_args
-                    .iter()
-                    .map(|arg| {
-                        let sensitive_arg = Local::from_usize(*arg);
-                        compute_dependencies(self.tcx, def_id, sensitive_arg)
-                    })
-                    .reduce(|acc, e| {
-                        let mut new_acc = acc.clone();
-                        new_acc.union(&e);
-                        new_acc
-                    })
-                    .unwrap();
+                let deps = compute_dependent_locals(
+                    self.tcx,
+                    def_id,
+                    important_args
+                        .iter()
+                        .map(|arg| Local::from_usize(*arg))
+                        .collect(),
+                );
 
                 dbg!(&deps);
 
@@ -204,7 +178,7 @@ impl<'tcx> FnVisitor<'tcx> {
         tcx: ty::TyCtxt<'tcx>,
         current_body: &'tcx mir::Body<'tcx>,
         current_instance: ty::Instance<'tcx>,
-        current_deps: LocationOrArgSet,
+        current_deps: Vec<Local>,
     ) -> Self {
         Self {
             tcx,
@@ -220,7 +194,7 @@ impl<'tcx> FnVisitor<'tcx> {
         &self,
         new_body: &'tcx mir::Body<'tcx>,
         new_instance: ty::Instance<'tcx>,
-        new_deps: LocationOrArgSet,
+        new_deps: Vec<Local>,
     ) -> Self {
         Self {
             tcx: self.tcx,

@@ -3,7 +3,7 @@
 mod vartrack;
 mod visitors;
 
-use vartrack::compute_dependencies;
+use vartrack::compute_dependent_locals;
 use visitors::FnVisitor;
 
 extern crate rustc_borrowck;
@@ -18,20 +18,15 @@ extern crate rustc_span;
 use std::{borrow::Cow, env};
 
 use clap::Parser;
+use serde::{Deserialize, Serialize};
 
 use rustc_hir as hir;
 use rustc_middle::mir;
 use rustc_middle::mir::visit::Visitor;
 use rustc_middle::mir::Local;
 use rustc_middle::ty;
-
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
-// use rustc_utils::mir::borrowck_facts;
 
-use serde::{Deserialize, Serialize};
-
-// This struct is the plugin provided to the rustc_plugin framework,
-// and it must be exported for use by the CLI/driver binaries.
 pub struct ScrutinizerPlugin;
 
 // To parse CLI arguments, we use Clap.
@@ -39,6 +34,8 @@ pub struct ScrutinizerPlugin;
 pub struct ScrutinizerPluginArgs {
     #[arg(short, long)]
     function: String,
+    #[arg(short, long, num_args(1..), value_delimiter(','))]
+    pub important_args: Vec<usize>,
 }
 
 impl RustcPlugin for ScrutinizerPlugin {
@@ -52,15 +49,12 @@ impl RustcPlugin for ScrutinizerPlugin {
         "scrutinizer-driver".into()
     }
 
-    // In the CLI, we ask Clap to parse arguments and also specify a CrateFilter.
     fn args(&self, _target_dir: &Utf8Path) -> RustcPluginArgs<Self::Args> {
         let args = ScrutinizerPluginArgs::parse_from(env::args().skip(1));
         let filter = CrateFilter::AllCrates;
         RustcPluginArgs { args, filter }
     }
 
-    // In the driver, we use the Rustc API to start a compiler session
-    // for the arguments given to us by rustc_plugin.
     fn run(
         self,
         compiler_args: Vec<String>,
@@ -77,14 +71,6 @@ struct ScrutinizerCallbacks {
 }
 
 impl rustc_driver::Callbacks for ScrutinizerCallbacks {
-    // fn config(&mut self, config: &mut rustc_interface::Config) {
-    //     // You MUST configure rustc to ensure `get_body_with_borrowck_facts` will work.
-    //     borrowck_facts::enable_mir_simplification();
-    //     config.override_queries = Some(borrowck_facts::override_queries);
-    // }
-    // At the top-level, the Rustc API uses an event-based interface for
-    // accessing the compiler at different stages of compilation. In this callback,
-    // all the type-checking has completed.
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &rustc_interface::interface::Compiler,
@@ -112,8 +98,13 @@ fn scrutinizer(tcx: ty::TyCtxt, args: &ScrutinizerPluginArgs) {
             if let hir::ItemKind::Fn(fn_sig, _, _) = &item.kind {
                 let main_body = tcx.optimized_mir(def_id);
 
-                let sensitive_arg = Local::from_usize(1);
-                let deps = compute_dependencies(tcx, def_id, sensitive_arg);
+                let sensitive_args = args
+                    .important_args
+                    .iter()
+                    .map(|arg_num| Local::from_usize(*arg_num))
+                    .collect();
+
+                let deps = compute_dependent_locals(tcx, def_id, sensitive_args);
                 dbg!(&deps);
 
                 let main_instance = ty::Instance::mono(tcx, def_id);

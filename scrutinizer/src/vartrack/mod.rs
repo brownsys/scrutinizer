@@ -3,4 +3,4 @@ mod facts;
 mod intern;
 mod tab_delim;
 
-pub use compute::compute_dependencies;
+pub use compute::compute_dependent_locals;
