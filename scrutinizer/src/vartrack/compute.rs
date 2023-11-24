@@ -57,12 +57,13 @@ pub type Output = PoloniusEngineOutput<facts::LocalFacts>;
 pub fn compute_dependent_locals<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
-    arg_locals: Vec<Local>,
+    targets: Vec<Vec<(Place<'tcx>, LocationOrArg)>>,
+    direction: Direction
 ) -> Vec<Local> {
     // Retrieve optimized MIR body.
     // For foreign crate items, it would be saved during the crate's compilation.
     let body = tcx.optimized_mir(def_id).to_owned();
-    println!("Body:\n{}", body.to_string(tcx).unwrap());
+    // println!("Body:\n{}", body.to_string(tcx).unwrap());
 
     // Create the shimmed LocationTable, which is identical to the original LocationTable.
     let location_table = LocationTableShim::new(&body);
@@ -106,18 +107,9 @@ pub fn compute_dependent_locals<'tcx>(
         engine::iterate_to_fixpoint(tcx, &body_with_facts.body, location_domain, analysis)
     };
 
-    // Construct targets of the arguments.
-    let targets = vec![arg_locals
-        .into_iter()
-        .map(|arg_local| {
-            let arg_place = Place::make(arg_local, &[], tcx);
-            return (arg_place, LocationOrArg::Arg(arg_local));
-        })
-        .collect::<Vec<_>>()];
-
     // Use Flowistry to compute the locations and places influenced by the target.
     let location_deps =
-        flowistry::infoflow::compute_dependencies(&results, targets.clone(), Direction::Forward)
+        flowistry::infoflow::compute_dependencies(&results, targets.clone(), direction)
             .into_iter()
             .reduce(|acc, e| {
                 let mut new_acc = acc.clone();

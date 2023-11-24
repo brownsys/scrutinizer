@@ -18,14 +18,18 @@ extern crate rustc_span;
 use std::{borrow::Cow, env};
 
 use clap::Parser;
+use flowistry::infoflow::Direction;
+use flowistry::indexed::impls::LocationOrArg;
 use serde::{Deserialize, Serialize};
 
 use rustc_hir as hir;
 use rustc_middle::mir;
 use rustc_middle::mir::visit::Visitor;
 use rustc_middle::mir::Local;
+use rustc_middle::mir::Place;
 use rustc_middle::ty;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
+use rustc_utils::PlaceExt;
 
 pub struct ScrutinizerPlugin;
 
@@ -98,14 +102,18 @@ fn scrutinizer(tcx: ty::TyCtxt, args: &ScrutinizerPluginArgs) {
             if let hir::ItemKind::Fn(fn_sig, _, _) = &item.kind {
                 let main_body = tcx.optimized_mir(def_id);
 
-                let sensitive_args = args
+                let targets = vec![args
                     .important_args
                     .iter()
-                    .map(|arg_num| Local::from_usize(*arg_num))
-                    .collect();
+                    .map(|arg| {
+                        let arg_local = Local::from_usize(*arg);
+                        let arg_place = Place::make(arg_local, &[], tcx);
+                        return (arg_place, LocationOrArg::Arg(arg_local));
+                    })
+                    .collect::<Vec<_>>()];
 
-                let deps = compute_dependent_locals(tcx, def_id, sensitive_args);
-                dbg!(&deps);
+                let deps =
+                    compute_dependent_locals(tcx, def_id, targets, Direction::Forward);
 
                 let main_instance = ty::Instance::mono(tcx, def_id);
 
@@ -128,7 +136,7 @@ fn scrutinizer(tcx: ty::TyCtxt, args: &ScrutinizerPluginArgs) {
 
                 println!("--> Performing call tree traversal...");
 
-                let mut visitor = FnVisitor::new(tcx, main_body, main_instance, deps);
+                let mut visitor = FnVisitor::new(tcx, def_id, main_body, main_instance, deps);
                 // Begin the traversal.
                 visitor.visit_body(main_body);
                 // Show all checked bodies encountered.

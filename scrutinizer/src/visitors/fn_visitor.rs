@@ -1,3 +1,4 @@
+use flowistry::infoflow::Direction;
 use regex::Regex;
 
 use std::cell::RefCell;
@@ -5,22 +6,36 @@ use std::rc::Rc;
 
 use rustc_hir as hir;
 use rustc_middle::mir;
-use rustc_middle::mir::{visit::Visitor, Local};
+use rustc_middle::mir::{visit::Visitor, Local, Place};
 use rustc_middle::ty;
+use rustc_utils::PlaceExt;
+
+use flowistry::indexed::impls::LocationOrArg;
 
 use super::super::vartrack::compute_dependent_locals;
 use super::raw_ptr_deref_visitor::has_raw_ptr_deref;
 
 #[derive(Debug)]
-struct FnCallInfo<'tcx> {
-    def_id: hir::def_id::DefId,
-    arg_tys: Option<Vec<ty::Ty<'tcx>>>,
-    call_span: Option<rustc_span::Span>,
-    body_span: Option<rustc_span::Span>,
-    // Whether we were able to retrieve and check the MIR for the function body.
-    body_checked: bool,
-    // Whether body contains raw pointer dereference.
-    raw_ptr_deref: bool,
+pub enum ArgTy<'tcx> {
+    Simple(ty::Ty<'tcx>),
+    WithClosureInfluences(ty::Ty<'tcx>, Vec<ty::Ty<'tcx>>),
+}
+
+#[derive(Debug)]
+pub enum FnCallInfo<'tcx> {
+    WithBody {
+        def_id: hir::def_id::DefId,
+        arg_tys: Vec<ArgTy<'tcx>>,
+        call_span: rustc_span::Span,
+        body_span: rustc_span::Span,
+        // Whether body contains raw pointer dereference.
+        raw_ptr_deref: bool,
+    },
+    WithoutBody {
+        def_id: hir::def_id::DefId,
+        arg_tys: Vec<ArgTy<'tcx>>,
+        call_span: rustc_span::Span,
+    },
 }
 
 pub struct FnVisitor<'tcx> {
@@ -28,6 +43,7 @@ pub struct FnVisitor<'tcx> {
     // Maintain single list of function calls.
     fn_calls: Rc<RefCell<Vec<FnCallInfo<'tcx>>>>,
     unhandled_terminators: Rc<RefCell<Vec<mir::Terminator<'tcx>>>>,
+    current_def_id: hir::def_id::DefId,
     current_body: &'tcx mir::Body<'tcx>,
     current_instance: ty::Instance<'tcx>,
     current_deps: Vec<Local>,
@@ -55,7 +71,34 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                 // Retrieve argument types.
                 let arg_tys = args
                     .iter()
-                    .map(|arg| arg.ty(self.current_body, self.tcx))
+                    .map(|arg| {
+                        let backward_deps = arg.place().and_then(|place| {
+                            let targets = vec![vec![(place, LocationOrArg::Location(location))]];
+                            Some(compute_dependent_locals(
+                                self.tcx,
+                                self.current_def_id,
+                                targets,
+                                Direction::Backward,
+                            ))
+                        });
+                        let backward_deps_tys = backward_deps
+                            .into_iter()
+                            .map(|backward_deps_for_local| {
+                                backward_deps_for_local
+                                    .into_iter()
+                                    .map(|local| self.current_body.local_decls[local].ty)
+                                    .filter(|ty| ty.contains_closure())
+                                    .collect::<Vec<_>>()
+                            })
+                            .flatten()
+                            .collect::<Vec<_>>();
+                        let arg_ty = arg.ty(self.current_body, self.tcx);
+                        if backward_deps_tys.is_empty() {
+                            ArgTy::Simple(arg_ty)
+                        } else {
+                            ArgTy::WithClosureInfluences(arg_ty, backward_deps_tys)
+                        }
+                    })
                     .collect::<Vec<_>>();
 
                 // Select all arguments that appear in this function call.
@@ -76,17 +119,9 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                     })
                     .collect();
 
-                dbg!(&important_args);
-
                 // Only check there are some important args.
                 if !important_args.is_empty() {
-                    self.visit_fn_call(
-                        *def_id,
-                        substs,
-                        Some(arg_tys),
-                        Some(*fn_span),
-                        important_args,
-                    );
+                    self.visit_fn_call(*def_id, substs, arg_tys, *fn_span, important_args);
                 }
             } else {
                 self.unhandled_terminators
@@ -103,8 +138,8 @@ impl<'tcx> FnVisitor<'tcx> {
         &mut self,
         def_id: hir::def_id::DefId,
         substs: ty::subst::SubstsRef<'tcx>,
-        arg_tys: Option<Vec<ty::Ty<'tcx>>>,
-        call_span: Option<rustc_span::Span>,
+        arg_tys: Vec<ArgTy<'tcx>>,
+        call_span: rustc_span::Span,
         important_args: Vec<usize>,
     ) {
         // Resolve function instance.
@@ -135,47 +170,45 @@ impl<'tcx> FnVisitor<'tcx> {
             if self.tcx.is_mir_available(def_id) {
                 let body = self.tcx.optimized_mir(def_id);
 
+                // Construct targets of the arguments.
+                let targets = vec![important_args
+                    .iter()
+                    .map(|arg| {
+                        let arg_local = Local::from_usize(*arg);
+                        let arg_place = Place::make(arg_local, &[], self.tcx);
+                        return (arg_place, LocationOrArg::Arg(arg_local));
+                    })
+                    .collect::<Vec<_>>()];
+
                 // Compute new dependencies for all important args.
-                let deps = compute_dependent_locals(
-                    self.tcx,
-                    def_id,
-                    important_args
-                        .iter()
-                        .map(|arg| Local::from_usize(*arg))
-                        .collect(),
-                );
+                let deps = compute_dependent_locals(self.tcx, def_id, targets, Direction::Forward);
 
-                dbg!(&deps);
-
-                self.add_call(FnCallInfo {
+                self.add_call(FnCallInfo::WithBody {
                     def_id,
                     arg_tys,
                     call_span,
-                    body_span: Some(body.span),
-                    body_checked: true,
+                    body_span: body.span,
                     raw_ptr_deref: has_raw_ptr_deref(self.tcx, body),
                 });
 
                 if let Some(instance) = maybe_instance {
                     // Swap the current instance and body and continue recursively.
-                    let mut visitor = self.update(body, instance, deps);
+                    let mut visitor = self.update(def_id, body, instance, deps);
                     visitor.visit_body(body);
                 }
             } else {
                 // Otherwise, we are unable to verify the purity due to external reference or dynamic dispatch.
-                self.add_call(FnCallInfo {
+                self.add_call(FnCallInfo::WithoutBody {
                     def_id,
                     arg_tys,
                     call_span,
-                    body_span: None,
-                    body_checked: false,
-                    raw_ptr_deref: false,
                 });
             }
         }
     }
     pub fn new(
         tcx: ty::TyCtxt<'tcx>,
+        current_def_id: hir::def_id::DefId,
         current_body: &'tcx mir::Body<'tcx>,
         current_instance: ty::Instance<'tcx>,
         current_deps: Vec<Local>,
@@ -183,6 +216,7 @@ impl<'tcx> FnVisitor<'tcx> {
         Self {
             tcx,
             fn_calls: Rc::new(RefCell::new(Vec::new())),
+            current_def_id,
             current_body,
             current_instance,
             current_deps,
@@ -192,6 +226,7 @@ impl<'tcx> FnVisitor<'tcx> {
 
     fn update(
         &self,
+        new_def_id: hir::def_id::DefId,
         new_body: &'tcx mir::Body<'tcx>,
         new_instance: ty::Instance<'tcx>,
         new_deps: Vec<Local>,
@@ -199,6 +234,7 @@ impl<'tcx> FnVisitor<'tcx> {
         Self {
             tcx: self.tcx,
             fn_calls: self.fn_calls.clone(),
+            current_def_id: new_def_id,
             current_body: new_body,
             current_instance: new_instance,
             current_deps: new_deps,
@@ -211,23 +247,30 @@ impl<'tcx> FnVisitor<'tcx> {
     }
 
     fn encountered_def_id(&self, def_id: hir::def_id::DefId) -> bool {
-        self.fn_calls
-            .borrow()
-            .iter()
-            .any(|fn_call_info| fn_call_info.def_id == def_id)
+        self.fn_calls.borrow().iter().any(|fn_call_info| {
+            let fn_call_info_def_id = match fn_call_info {
+                FnCallInfo::WithBody { def_id, .. } => def_id,
+                FnCallInfo::WithoutBody { def_id, .. } => def_id,
+            };
+            *fn_call_info_def_id == def_id
+        })
     }
 
     pub fn dump_passing(&self) {
         for fn_call in self.fn_calls.borrow().iter() {
             if self.check_fn_call_purity(fn_call) {
                 println!("--> Passing function call: {:#?}", fn_call);
-                match fn_call.body_span {
-                    Some(span) => {
-                        let body_snippet =
-                            self.tcx.sess.source_map().span_to_snippet(span).unwrap();
+                match fn_call {
+                    FnCallInfo::WithBody { body_span, .. } => {
+                        let body_snippet = self
+                            .tcx
+                            .sess
+                            .source_map()
+                            .span_to_snippet(*body_span)
+                            .unwrap();
                         println!("Body snippet: {:?}", body_snippet);
                     }
-                    None => (),
+                    FnCallInfo::WithoutBody { .. } => (),
                 }
             }
         }
@@ -237,13 +280,17 @@ impl<'tcx> FnVisitor<'tcx> {
         for fn_call in self.fn_calls.borrow().iter() {
             if !self.check_fn_call_purity(fn_call) {
                 println!("--> Violating function call: {:#?}", fn_call);
-                match fn_call.body_span {
-                    Some(span) => {
-                        let body_snippet =
-                            self.tcx.sess.source_map().span_to_snippet(span).unwrap();
+                match fn_call {
+                    FnCallInfo::WithBody { body_span, .. } => {
+                        let body_snippet = self
+                            .tcx
+                            .sess
+                            .source_map()
+                            .span_to_snippet(*body_span)
+                            .unwrap();
                         println!("Body snippet: {:?}", body_snippet);
                     }
-                    None => (),
+                    FnCallInfo::WithoutBody { .. } => (),
                 }
             }
         }
@@ -260,10 +307,20 @@ impl<'tcx> FnVisitor<'tcx> {
             Regex::new(r"core\[\w*\]::intrinsics").unwrap(),
             Regex::new(r"core\[\w*\]::panicking").unwrap(),
         ];
-
-        let def_path_str = format!("{:?}", fn_call.def_id);
-        (fn_call.body_checked && !fn_call.raw_ptr_deref)
-            || (allowed_libs.iter().any(|lib| lib.is_match(&def_path_str)))
+        match fn_call {
+            FnCallInfo::WithBody {
+                def_id,
+                raw_ptr_deref,
+                ..
+            } => {
+                let def_path_str = format!("{:?}", def_id);
+                !raw_ptr_deref || (allowed_libs.iter().any(|lib| lib.is_match(&def_path_str)))
+            }
+            FnCallInfo::WithoutBody { def_id, .. } => {
+                let def_path_str = format!("{:?}", def_id);
+                allowed_libs.iter().any(|lib| lib.is_match(&def_path_str))
+            }
+        }
     }
 
     pub fn check_purity(&self) -> bool {
