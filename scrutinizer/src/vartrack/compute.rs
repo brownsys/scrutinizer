@@ -10,7 +10,6 @@ use rustc_middle::{
     mir::{BasicBlock, Body, Local, Place, StatementKind, TerminatorKind},
     ty::TyCtxt,
 };
-use rustc_utils::{BodyExt, PlaceExt};
 
 use std::mem::transmute;
 use std::path::Path;
@@ -58,12 +57,11 @@ pub fn compute_dependent_locals<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
     targets: Vec<Vec<(Place<'tcx>, LocationOrArg)>>,
-    direction: Direction
+    direction: Direction,
 ) -> Vec<Local> {
     // Retrieve optimized MIR body.
     // For foreign crate items, it would be saved during the crate's compilation.
     let body = tcx.optimized_mir(def_id).to_owned();
-    // println!("Body:\n{}", body.to_string(tcx).unwrap());
 
     // Create the shimmed LocationTable, which is identical to the original LocationTable.
     let location_table = LocationTableShim::new(&body);

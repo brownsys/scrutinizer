@@ -1,57 +1,35 @@
-use flowistry::infoflow::Direction;
 use regex::Regex;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use rustc_hir as hir;
-use rustc_middle::mir;
-use rustc_middle::mir::{visit::Visitor, Local, Place};
-use rustc_middle::ty;
+use rustc_hir::def_id::DefId;
+use rustc_middle::mir::{visit::Visitor, Body, Local, Location, Place, Terminator, TerminatorKind};
+use rustc_middle::ty::{subst::SubstsRef, FnDef, Instance, ParamEnv, TyCtxt};
 use rustc_utils::PlaceExt;
 
 use flowistry::indexed::impls::LocationOrArg;
+use flowistry::infoflow::Direction;
 
 use super::super::vartrack::compute_dependent_locals;
 use super::raw_ptr_deref_visitor::has_raw_ptr_deref;
-
-#[derive(Debug)]
-pub enum ArgTy<'tcx> {
-    Simple(ty::Ty<'tcx>),
-    WithClosureInfluences(ty::Ty<'tcx>, Vec<ty::Ty<'tcx>>),
-}
-
-#[derive(Debug)]
-pub enum FnCallInfo<'tcx> {
-    WithBody {
-        def_id: hir::def_id::DefId,
-        arg_tys: Vec<ArgTy<'tcx>>,
-        call_span: rustc_span::Span,
-        body_span: rustc_span::Span,
-        // Whether body contains raw pointer dereference.
-        raw_ptr_deref: bool,
-    },
-    WithoutBody {
-        def_id: hir::def_id::DefId,
-        arg_tys: Vec<ArgTy<'tcx>>,
-        call_span: rustc_span::Span,
-    },
-}
+use super::types::{ArgTy, FnCallInfo};
 
 pub struct FnVisitor<'tcx> {
-    tcx: ty::TyCtxt<'tcx>,
+    tcx: TyCtxt<'tcx>,
     // Maintain single list of function calls.
     fn_calls: Rc<RefCell<Vec<FnCallInfo<'tcx>>>>,
-    unhandled_terminators: Rc<RefCell<Vec<mir::Terminator<'tcx>>>>,
-    current_def_id: hir::def_id::DefId,
-    current_body: &'tcx mir::Body<'tcx>,
-    current_instance: ty::Instance<'tcx>,
+    unhandled_terminators: Rc<RefCell<Vec<Terminator<'tcx>>>>,
+    current_arg_tys: Vec<ArgTy<'tcx>>,
+    current_def_id: DefId,
+    current_body: &'tcx Body<'tcx>,
+    current_instance: Instance<'tcx>,
     current_deps: Vec<Local>,
 }
 
-impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
-    fn visit_terminator(&mut self, terminator: &mir::Terminator<'tcx>, location: mir::Location) {
-        if let mir::TerminatorKind::Call {
+impl<'tcx> Visitor<'tcx> for FnVisitor<'tcx> {
+    fn visit_terminator(&mut self, terminator: &Terminator<'tcx>, location: Location) {
+        if let TerminatorKind::Call {
             func,
             args,
             fn_span,
@@ -63,11 +41,11 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                 .current_instance
                 .subst_mir_and_normalize_erasing_regions(
                     self.tcx,
-                    ty::ParamEnv::reveal_all(),
+                    ParamEnv::reveal_all(),
                     func.ty(self.current_body, self.tcx),
                 );
 
-            if let ty::FnDef(def_id, substs) = func_ty.kind() {
+            if let FnDef(def_id, substs) = func_ty.kind() {
                 // Retrieve argument types.
                 let arg_tys = args
                     .iter()
@@ -86,7 +64,29 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
                             .map(|backward_deps_for_local| {
                                 backward_deps_for_local
                                     .into_iter()
-                                    .map(|local| self.current_body.local_decls[local].ty)
+                                    .map(|local| {
+                                        let mut dependent_types = if local.index() != 0
+                                            && local.index() <= self.current_arg_tys.len()
+                                        {
+                                            match self.current_arg_tys[local.index() - 1] {
+                                                ArgTy::Simple(ty) => vec![ty],
+                                                ArgTy::WithClosureInfluences(
+                                                    ty,
+                                                    ref influences,
+                                                ) => {
+                                                    let mut new_influences = influences.to_owned();
+                                                    new_influences.push(ty);
+                                                    new_influences
+                                                }
+                                            }
+                                        } else {
+                                            vec![]
+                                        };
+                                        dependent_types
+                                            .push(self.current_body.local_decls[local].ty);
+                                        dependent_types
+                                    })
+                                    .flatten()
                                     .filter(|ty| ty.contains_closure())
                                     .collect::<Vec<_>>()
                             })
@@ -136,15 +136,15 @@ impl<'tcx> mir::visit::Visitor<'tcx> for FnVisitor<'tcx> {
 impl<'tcx> FnVisitor<'tcx> {
     pub fn visit_fn_call(
         &mut self,
-        def_id: hir::def_id::DefId,
-        substs: ty::subst::SubstsRef<'tcx>,
+        def_id: DefId,
+        substs: SubstsRef<'tcx>,
         arg_tys: Vec<ArgTy<'tcx>>,
         call_span: rustc_span::Span,
         important_args: Vec<usize>,
     ) {
         // Resolve function instance.
         let maybe_instance =
-            ty::Instance::resolve(self.tcx, ty::ParamEnv::reveal_all(), def_id, substs).unwrap();
+            Instance::resolve(self.tcx, ParamEnv::reveal_all(), def_id, substs).unwrap();
 
         let def_id = match maybe_instance {
             Some(instance) => {
@@ -185,7 +185,7 @@ impl<'tcx> FnVisitor<'tcx> {
 
                 self.add_call(FnCallInfo::WithBody {
                     def_id,
-                    arg_tys,
+                    arg_tys: arg_tys.clone(),
                     call_span,
                     body_span: body.span,
                     raw_ptr_deref: has_raw_ptr_deref(self.tcx, body),
@@ -193,7 +193,7 @@ impl<'tcx> FnVisitor<'tcx> {
 
                 if let Some(instance) = maybe_instance {
                     // Swap the current instance and body and continue recursively.
-                    let mut visitor = self.update(def_id, body, instance, deps);
+                    let mut visitor = self.update(arg_tys, def_id, body, instance, deps);
                     visitor.visit_body(body);
                 }
             } else {
@@ -207,15 +207,17 @@ impl<'tcx> FnVisitor<'tcx> {
         }
     }
     pub fn new(
-        tcx: ty::TyCtxt<'tcx>,
-        current_def_id: hir::def_id::DefId,
-        current_body: &'tcx mir::Body<'tcx>,
-        current_instance: ty::Instance<'tcx>,
+        tcx: TyCtxt<'tcx>,
+        current_arg_tys: Vec<ArgTy<'tcx>>,
+        current_def_id: DefId,
+        current_body: &'tcx Body<'tcx>,
+        current_instance: Instance<'tcx>,
         current_deps: Vec<Local>,
     ) -> Self {
         Self {
             tcx,
             fn_calls: Rc::new(RefCell::new(Vec::new())),
+            current_arg_tys,
             current_def_id,
             current_body,
             current_instance,
@@ -226,14 +228,16 @@ impl<'tcx> FnVisitor<'tcx> {
 
     fn update(
         &self,
-        new_def_id: hir::def_id::DefId,
-        new_body: &'tcx mir::Body<'tcx>,
-        new_instance: ty::Instance<'tcx>,
+        new_arg_tys: Vec<ArgTy<'tcx>>,
+        new_def_id: DefId,
+        new_body: &'tcx Body<'tcx>,
+        new_instance: Instance<'tcx>,
         new_deps: Vec<Local>,
     ) -> Self {
         Self {
             tcx: self.tcx,
             fn_calls: self.fn_calls.clone(),
+            current_arg_tys: new_arg_tys,
             current_def_id: new_def_id,
             current_body: new_body,
             current_instance: new_instance,
@@ -246,7 +250,7 @@ impl<'tcx> FnVisitor<'tcx> {
         self.fn_calls.borrow_mut().push(new_call);
     }
 
-    fn encountered_def_id(&self, def_id: hir::def_id::DefId) -> bool {
+    fn encountered_def_id(&self, def_id: DefId) -> bool {
         self.fn_calls.borrow().iter().any(|fn_call_info| {
             let fn_call_info_def_id = match fn_call_info {
                 FnCallInfo::WithBody { def_id, .. } => def_id,

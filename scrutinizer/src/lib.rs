@@ -18,8 +18,8 @@ extern crate rustc_span;
 use std::{borrow::Cow, env};
 
 use clap::Parser;
-use flowistry::infoflow::Direction;
 use flowistry::indexed::impls::LocationOrArg;
+use flowistry::infoflow::Direction;
 use serde::{Deserialize, Serialize};
 
 use rustc_hir as hir;
@@ -112,8 +112,7 @@ fn scrutinizer(tcx: ty::TyCtxt, args: &ScrutinizerPluginArgs) {
                     })
                     .collect::<Vec<_>>()];
 
-                let deps =
-                    compute_dependent_locals(tcx, def_id, targets, Direction::Forward);
+                let deps = compute_dependent_locals(tcx, def_id, targets, Direction::Forward);
 
                 let main_instance = ty::Instance::mono(tcx, def_id);
 
@@ -136,7 +135,8 @@ fn scrutinizer(tcx: ty::TyCtxt, args: &ScrutinizerPluginArgs) {
 
                 println!("--> Performing call tree traversal...");
 
-                let mut visitor = FnVisitor::new(tcx, def_id, main_body, main_instance, deps);
+                let mut visitor =
+                    FnVisitor::new(tcx, vec![], def_id, main_body, main_instance, deps);
                 // Begin the traversal.
                 visitor.visit_body(main_body);
                 // Show all checked bodies encountered.
