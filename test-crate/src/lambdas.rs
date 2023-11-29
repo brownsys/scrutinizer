@@ -66,9 +66,9 @@ pub fn closure_test(a: usize) {
         }
     };
 
-    execute(a, lambda);
+    // execute(a, lambda);
     // execute_destruct(a, lambda_ref);
-    // execute_dyn(a, &lambda);
+    execute_dyn(a, &lambda);
     // execute(a, closure_capture);
     // execute(a, closure_capture_move);
     // execute(a, ambiguous_lambda);
