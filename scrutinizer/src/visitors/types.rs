@@ -8,7 +8,7 @@ pub enum ArgTy<'tcx> {
     WithClosureInfluences(Ty<'tcx>, Vec<Ty<'tcx>>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FnCallInfo<'tcx> {
     WithBody {
         def_id: DefId,

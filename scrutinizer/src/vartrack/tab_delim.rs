@@ -7,14 +7,14 @@ use std::io::{self, prelude::*};
 use std::path::Path;
 use std::process;
 
-pub trait FromTabDelimited<'input>: Sized {
+trait FromTabDelimited<'input>: Sized {
     fn parse(
         tables: &mut InternerTables,
         inputs: &mut dyn Iterator<Item = &'input str>,
     ) -> Option<Self>;
 }
 
-pub fn load_tab_delimited_facts(
+pub(super) fn load_tab_delimited_facts(
     tables: &mut InternerTables,
     facts_dir: &Path,
 ) -> io::Result<AllFacts> {
@@ -56,7 +56,7 @@ pub fn load_tab_delimited_facts(
     }
 }
 
-pub fn load_tab_delimited_file<Row>(
+fn load_tab_delimited_file<Row>(
     tables: &mut InternerTables,
     path: &Path,
 ) -> io::Result<Vec<Row>>

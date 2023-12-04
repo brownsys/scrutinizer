@@ -1,6 +1,5 @@
-use regex::Regex;
-
 use itertools::Itertools;
+use regex::Regex;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -16,15 +15,15 @@ use rustc_utils::PlaceExt;
 use flowistry::indexed::impls::LocationOrArg;
 use flowistry::infoflow::Direction;
 
-use super::super::vartrack::compute_dependent_locals;
+use super::fn_call_storage::FnCallStorage;
 use super::raw_ptr_deref_visitor::has_raw_ptr_deref;
 use super::types::{ArgTy, FnCallInfo};
+use crate::vartrack::compute_dependent_locals;
 
 pub struct FnVisitor<'tcx> {
     tcx: TyCtxt<'tcx>,
-    // Maintain single list of function calls.
-    fn_calls: Rc<RefCell<Vec<FnCallInfo<'tcx>>>>,
-    unhandled_terminators: Rc<RefCell<Vec<Terminator<'tcx>>>>,
+    // Maintain single list of function calls and unhandled terminators.
+    storage: Rc<RefCell<FnCallStorage<'tcx>>>,
     current_arg_tys: Vec<ArgTy<'tcx>>,
     current_def_id: DefId,
     current_body: &'tcx Body<'tcx>,
@@ -55,13 +54,13 @@ impl<'tcx> Visitor<'tcx> for FnVisitor<'tcx> {
                 let arg_tys: Vec<ArgTy> = args
                     .iter()
                     .map(|arg| {
-                        let backward_deps_tys = self.extract_backwards_deps_tys(arg, &location);
+                        let backward_deps = self.extract_backwards_deps(arg, &location);
                         let arg_ty = arg.ty(self.current_body, self.tcx);
 
-                        if backward_deps_tys.is_empty() {
+                        if backward_deps.is_empty() {
                             ArgTy::Simple(arg_ty)
                         } else {
-                            ArgTy::WithClosureInfluences(arg_ty, backward_deps_tys)
+                            ArgTy::WithClosureInfluences(arg_ty, backward_deps)
                         }
                     })
                     .collect();
@@ -89,9 +88,9 @@ impl<'tcx> Visitor<'tcx> for FnVisitor<'tcx> {
                     self.visit_fn_call(*def_id, substs, arg_tys.clone(), *fn_span, important_args);
                 }
             } else {
-                self.unhandled_terminators
+                self.storage
                     .borrow_mut()
-                    .push(terminator.to_owned());
+                    .add_terminator(terminator.to_owned());
             }
         }
         self.super_terminator(terminator, location);
@@ -108,6 +107,7 @@ impl<'tcx> FnVisitor<'tcx> {
         important_args: Vec<usize>,
     ) {
         let instances = {
+            // All possible closure shims that we need to analyze.
             let closure_shims = vec![
                 Regex::new(r"core\[\w*\]::ops::function::FnMut::call_mut").unwrap(),
                 Regex::new(r"core\[\w*\]::ops::function::FnOnce::call_once").unwrap(),
@@ -117,12 +117,17 @@ impl<'tcx> FnVisitor<'tcx> {
 
             if closure_shims.iter().any(|lib| lib.is_match(&def_path_str)) {
                 // Extract closure influences, as we have encountered a closure shim.
-                self.extract_closure_influences(&arg_tys)
+                let closure_influences = self.extract_closure_influences(&arg_tys);
+                // Check if there are any closure influences, return intact shim if not.
+                if closure_influences.is_empty() {
+                    vec![(None, def_id)]
+                } else {
+                    closure_influences
+                }
             } else {
                 // Resolve function instance.
                 let maybe_instance =
                     Instance::resolve(self.tcx, ParamEnv::reveal_all(), def_id, substs).unwrap();
-
                 match maybe_instance {
                     Some(instance) => vec![(Some(instance), instance.def_id())],
                     None => vec![(None, def_id)],
@@ -133,21 +138,19 @@ impl<'tcx> FnVisitor<'tcx> {
         for (maybe_instance, def_id) in instances.into_iter() {
             // Only if we have not seen this call before.
             // TODO: this is no longer valid, think about handling recursive call chains.
-            if !self.encountered_def_id(def_id) {
+            if !self.storage.borrow().encountered_def_id(def_id) {
                 if self.tcx.is_const_fn_raw(def_id) {
                     return;
                 }
-
                 if self.tcx.is_mir_available(def_id) {
                     let body = self.tcx.optimized_mir(def_id);
-
                     // Construct targets of the arguments.
                     let targets = vec![important_args
                         .iter()
                         .map(|arg| {
                             let arg_local = Local::from_usize(*arg);
                             let arg_place = Place::make(arg_local, &[], self.tcx);
-                            return (arg_place, LocationOrArg::Arg(arg_local));
+                            (arg_place, LocationOrArg::Arg(arg_local))
                         })
                         .collect()];
 
@@ -155,7 +158,7 @@ impl<'tcx> FnVisitor<'tcx> {
                     let deps =
                         compute_dependent_locals(self.tcx, def_id, targets, Direction::Forward);
 
-                    self.add_call(FnCallInfo::WithBody {
+                    self.storage.borrow_mut().add_call(FnCallInfo::WithBody {
                         def_id,
                         arg_tys: arg_tys.clone(),
                         call_span,
@@ -163,15 +166,13 @@ impl<'tcx> FnVisitor<'tcx> {
                         raw_ptr_deref: has_raw_ptr_deref(self.tcx, body),
                     });
 
-                    if let Some(instance) = maybe_instance {
-                        // Swap the current instance and body and continue recursively.
-                        let mut visitor =
-                            self.update(arg_tys.clone(), def_id, body, instance, deps);
-                        visitor.visit_body(body);
-                    }
+                    let instance = maybe_instance.unwrap();
+                    // Swap the current instance and body and continue recursively.
+                    let mut visitor = self.update(arg_tys.clone(), def_id, body, instance, deps);
+                    visitor.visit_body(body);
                 } else {
                     // Otherwise, we are unable to verify the purity due to external reference or dynamic dispatch.
-                    self.add_call(FnCallInfo::WithoutBody {
+                    self.storage.borrow_mut().add_call(FnCallInfo::WithoutBody {
                         def_id,
                         arg_tys: arg_tys.clone(),
                         call_span,
@@ -191,13 +192,12 @@ impl<'tcx> FnVisitor<'tcx> {
     ) -> Self {
         Self {
             tcx,
-            fn_calls: Rc::new(RefCell::new(Vec::new())),
+            storage: Rc::new(RefCell::new(FnCallStorage::new())),
             current_arg_tys,
             current_def_id,
             current_body,
             current_instance,
             current_deps,
-            unhandled_terminators: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -211,103 +211,17 @@ impl<'tcx> FnVisitor<'tcx> {
     ) -> Self {
         Self {
             tcx: self.tcx,
-            fn_calls: self.fn_calls.clone(),
+            storage: self.storage.clone(),
             current_arg_tys: new_arg_tys,
             current_def_id: new_def_id,
             current_body: new_body,
             current_instance: new_instance,
             current_deps: new_deps,
-            unhandled_terminators: self.unhandled_terminators.clone(),
         }
     }
 
-    fn add_call(&mut self, new_call: FnCallInfo<'tcx>) {
-        self.fn_calls.borrow_mut().push(new_call);
-    }
-
-    fn encountered_def_id(&self, def_id: DefId) -> bool {
-        self.fn_calls.borrow().iter().any(|fn_call_info| {
-            let fn_call_info_def_id = match fn_call_info {
-                FnCallInfo::WithBody { def_id, .. } => def_id,
-                FnCallInfo::WithoutBody { def_id, .. } => def_id,
-            };
-            *fn_call_info_def_id == def_id
-        })
-    }
-
-    pub fn dump_passing(&self) {
-        for fn_call in self.fn_calls.borrow().iter() {
-            if self.check_fn_call_purity(fn_call) {
-                println!("--> Passing function call: {:#?}", fn_call);
-                match fn_call {
-                    FnCallInfo::WithBody { body_span, .. } => {
-                        let body_snippet = self
-                            .tcx
-                            .sess
-                            .source_map()
-                            .span_to_snippet(*body_span)
-                            .unwrap();
-                        println!("Body snippet: {:?}", body_snippet);
-                    }
-                    FnCallInfo::WithoutBody { .. } => (),
-                }
-            }
-        }
-    }
-
-    pub fn dump_violating(&self) {
-        for fn_call in self.fn_calls.borrow().iter() {
-            if !self.check_fn_call_purity(fn_call) {
-                println!("--> Violating function call: {:#?}", fn_call);
-                match fn_call {
-                    FnCallInfo::WithBody { body_span, .. } => {
-                        let body_snippet = self
-                            .tcx
-                            .sess
-                            .source_map()
-                            .span_to_snippet(*body_span)
-                            .unwrap();
-                        println!("Body snippet: {:?}", body_snippet);
-                    }
-                    FnCallInfo::WithoutBody { .. } => (),
-                }
-            }
-        }
-    }
-
-    pub fn dump_unhandled_terminators(&self) {
-        for unhandled_terminator in self.unhandled_terminators.borrow().iter() {
-            println!("--> Unhandled terminator: {:#?}", unhandled_terminator);
-        }
-    }
-
-    fn check_fn_call_purity(&self, fn_call: &FnCallInfo) -> bool {
-        let allowed_libs = vec![
-            Regex::new(r"core\[\w*\]::intrinsics").unwrap(),
-            Regex::new(r"core\[\w*\]::panicking").unwrap(),
-        ];
-        match fn_call {
-            FnCallInfo::WithBody {
-                def_id,
-                raw_ptr_deref,
-                ..
-            } => {
-                let def_path_str = format!("{:?}", def_id);
-                !raw_ptr_deref || (allowed_libs.iter().any(|lib| lib.is_match(&def_path_str)))
-            }
-            FnCallInfo::WithoutBody { def_id, .. } => {
-                let def_path_str = format!("{:?}", def_id);
-                allowed_libs.iter().any(|lib| lib.is_match(&def_path_str))
-            }
-        }
-    }
-
-    pub fn check_purity(&self) -> bool {
-        self.fn_calls
-            .borrow()
-            .iter()
-            .all(|fn_call| self.check_fn_call_purity(fn_call))
-            && self.unhandled_terminators.borrow().is_empty()
+    pub fn get_storage_clone(&self) -> FnCallStorage<'tcx> {
+        self.storage.borrow().to_owned()
     }
 
     fn extract_closure_influences(
@@ -356,11 +270,7 @@ impl<'tcx> FnVisitor<'tcx> {
             .collect()
     }
 
-    fn extract_backwards_deps_tys(
-        &self,
-        arg: &Operand<'tcx>,
-        location: &Location,
-    ) -> Vec<Ty<'tcx>> {
+    fn extract_backwards_deps(&self, arg: &Operand<'tcx>, location: &Location) -> Vec<Ty<'tcx>> {
         let backward_deps = arg.place().and_then(|place| {
             let targets = vec![vec![(place, LocationOrArg::Location(location.to_owned()))]];
             Some(compute_dependent_locals(

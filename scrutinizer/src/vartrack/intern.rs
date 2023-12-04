@@ -4,23 +4,23 @@ use std::collections::HashMap;
 
 /// When we load facts out of the table, they are essentially random
 /// strings. We create an intern table to map those to small integers.
-pub struct Interner<TargetType: From<usize> + Copy> {
-    pub strings: FxHashMap<String, TargetType>,
-    pub rev_strings: Vec<String>,
+pub(super) struct Interner<TargetType: From<usize> + Copy> {
+    strings: FxHashMap<String, TargetType>,
+    rev_strings: Vec<String>,
 }
 
 impl<TargetType> Interner<TargetType>
 where
     TargetType: From<usize> + Into<usize> + Copy,
 {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             strings: HashMap::default(),
             rev_strings: vec![],
         }
     }
 
-    pub fn intern(&mut self, data: &str) -> TargetType {
+    pub(super) fn intern(&mut self, data: &str) -> TargetType {
         if let Some(&interned) = self.strings.get(data) {
             return interned;
         }
@@ -31,16 +31,16 @@ where
     }
 }
 
-pub struct InternerTables {
-    pub origins: Interner<Origin>,
-    pub loans: Interner<Loan>,
-    pub points: Interner<Point>,
-    pub variables: Interner<Variable>,
-    pub paths: Interner<Path>,
+pub(super) struct InternerTables {
+    origins: Interner<Origin>,
+    loans: Interner<Loan>,
+    points: Interner<Point>,
+    variables: Interner<Variable>,
+    paths: Interner<Path>,
 }
 
 impl InternerTables {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             origins: Interner::new(),
             loans: Interner::new(),
@@ -51,7 +51,7 @@ impl InternerTables {
     }
 }
 
-pub trait InternTo<To> {
+pub(super) trait InternTo<To> {
     fn intern(tables: &mut InternerTables, input: Self) -> To;
 }
 

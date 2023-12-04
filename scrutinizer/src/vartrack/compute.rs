@@ -1,13 +1,13 @@
-use super::facts;
-use super::intern;
-use super::tab_delim;
+use super::facts::LocalFacts;
+use super::intern::InternerTables;
+use super::location_table::LocationTableShim;
+use super::tab_delim::load_tab_delimited_facts;
 
 use rustc_borrowck::BodyWithBorrowckFacts;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
-use rustc_index::vec::IndexVec;
 use rustc_middle::{
     dep_graph::DepContext,
-    mir::{BasicBlock, Body, Local, Place, StatementKind, TerminatorKind},
+    mir::{Local, Place, StatementKind, TerminatorKind},
     ty::TyCtxt,
 };
 
@@ -24,33 +24,7 @@ use flowistry::{
 use polonius_engine::Algorithm;
 use polonius_engine::Output as PoloniusEngineOutput;
 
-// This is needed to interoperate with rustc's LocationTable, which is pub(crate) by default.
-pub struct LocationTableShim {
-    num_points: usize,
-    statements_before_block: IndexVec<BasicBlock, usize>,
-}
-
-impl LocationTableShim {
-    pub fn new(body: &Body<'_>) -> Self {
-        let mut num_points = 0;
-        let statements_before_block = body
-            .basic_blocks
-            .iter()
-            .map(|block_data| {
-                let v = num_points;
-                num_points += (block_data.statements.len() + 1) * 2;
-                v
-            })
-            .collect();
-
-        Self {
-            num_points,
-            statements_before_block,
-        }
-    }
-}
-
-pub type Output = PoloniusEngineOutput<facts::LocalFacts>;
+type Output = PoloniusEngineOutput<LocalFacts>;
 
 // This function computes all locals that depend on the argument local for a given def_id.
 pub fn compute_dependent_locals<'tcx>(
@@ -81,9 +55,8 @@ pub fn compute_dependent_locals<'tcx>(
 
     // Run polonius on the borrow checker facts.
     let (input_facts, output_facts) = {
-        let tables = &mut intern::InternerTables::new();
-        let all_facts =
-            tab_delim::load_tab_delimited_facts(tables, &Path::new(&facts_dir)).unwrap();
+        let tables = &mut InternerTables::new();
+        let all_facts = load_tab_delimited_facts(tables, &Path::new(&facts_dir)).unwrap();
         let algorithm = Algorithm::Hybrid;
         let output = Output::compute(&all_facts, algorithm, false);
         (all_facts, output)

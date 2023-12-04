@@ -141,17 +141,17 @@ fn scrutinizer(tcx: ty::TyCtxt, args: &ScrutinizerPluginArgs) {
                 visitor.visit_body(main_body);
                 // Show all checked bodies encountered.
                 println!("--> Dumping all passing function bodies:");
-                visitor.dump_passing();
+                visitor.get_storage_clone().dump_passing(tcx);
                 // Show all unchecked bodies encountered.
                 println!("--> Dumping all violating function bodies:");
-                visitor.dump_violating();
+                visitor.get_storage_clone().dump_violating(tcx);
                 // Show all unhandled terminators encountered.
                 println!("--> Dumping all unhandled terminators:");
-                visitor.dump_unhandled_terminators();
+                visitor.get_storage_clone().dump_unhandled_terminators();
                 println!(
                     "--> Body purity check result for function {}: {}",
                     args.function,
-                    visitor.check_purity()
+                    visitor.get_storage_clone().check_purity()
                 );
             }
         }

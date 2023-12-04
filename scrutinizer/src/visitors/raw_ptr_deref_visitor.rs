@@ -41,7 +41,7 @@ impl<'tcx> mir::visit::Visitor<'tcx> for RawPtrDerefVisitor<'tcx> {
     }
 }
 
-pub fn has_raw_ptr_deref<'tcx>(tcx: ty::TyCtxt<'tcx>, body: &'tcx mir::Body<'tcx>) -> bool {
+pub(super) fn has_raw_ptr_deref<'tcx>(tcx: ty::TyCtxt<'tcx>, body: &'tcx mir::Body<'tcx>) -> bool {
     let mut ptr_deref_visitor = RawPtrDerefVisitor {
         tcx,
         body,
