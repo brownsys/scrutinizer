@@ -1,3 +1,4 @@
+use super::result::PurityAnalysisResult;
 use super::types::FnCallInfo;
 
 use regex::Regex;
@@ -8,27 +9,30 @@ use rustc_middle::ty::TyCtxt;
 
 #[derive(Clone)]
 pub struct FnCallStorage<'tcx> {
+    def_id: DefId,
     fn_calls: Vec<FnCallInfo<'tcx>>,
-    unhandled_terminators: Vec<Terminator<'tcx>>,
+    unhandled: Vec<Terminator<'tcx>>,
 }
 
 impl<'tcx> FnCallStorage<'tcx> {
-    pub fn new() -> FnCallStorage<'tcx> {
+    pub(super) fn new(def_id: DefId) -> FnCallStorage<'tcx> {
         Self {
+            def_id,
             fn_calls: vec![],
-            unhandled_terminators: vec![],
+            unhandled: vec![],
         }
     }
 
-    pub fn add_call(&mut self, new_call: FnCallInfo<'tcx>) {
+    pub(super) fn add_call(&mut self, new_call: FnCallInfo<'tcx>) {
         self.fn_calls.push(new_call);
     }
 
-    pub fn add_terminator(&mut self, new_terminator: Terminator<'tcx>) {
-        self.unhandled_terminators.push(new_terminator);
+    pub(super) fn add_unhandled(&mut self, new_unhandled: Terminator<'tcx>) {
+        self.unhandled.push(new_unhandled);
     }
 
-    pub fn encountered_def_id(&self, def_id: DefId) -> bool {
+    // TODO: this is no longer valid, think about handling recursive call chains.
+    pub(super) fn encountered_def_id(&self, def_id: DefId) -> bool {
         self.fn_calls.iter().any(|fn_call_info| {
             let fn_call_info_def_id = match fn_call_info {
                 FnCallInfo::WithBody { def_id, .. } => def_id,
@@ -38,7 +42,7 @@ impl<'tcx> FnCallStorage<'tcx> {
         })
     }
 
-    pub fn dump_passing(&self, tcx: TyCtxt<'tcx>) {
+    pub fn print_passing(&self, tcx: TyCtxt<'tcx>) {
         for fn_call in self.fn_calls.iter() {
             if self.check_fn_call_purity(fn_call) {
                 println!("--> Passing function call: {:#?}", fn_call);
@@ -54,10 +58,10 @@ impl<'tcx> FnCallStorage<'tcx> {
         }
     }
 
-    pub fn dump_violating(&self, tcx: TyCtxt<'tcx>) {
+    pub fn print_failing(&self, tcx: TyCtxt<'tcx>) {
         for fn_call in self.fn_calls.iter() {
             if !self.check_fn_call_purity(fn_call) {
-                println!("--> Violating function call: {:#?}", fn_call);
+                println!("--> Failing function call: {:#?}", fn_call);
                 match fn_call {
                     FnCallInfo::WithBody { body_span, .. } => {
                         let body_snippet =
@@ -70,8 +74,8 @@ impl<'tcx> FnCallStorage<'tcx> {
         }
     }
 
-    pub fn dump_unhandled_terminators(&self) {
-        for unhandled_terminator in self.unhandled_terminators.iter() {
+    pub fn print_unhandled(&self) {
+        for unhandled_terminator in self.unhandled.iter() {
             println!("--> Unhandled terminator: {:#?}", unhandled_terminator);
         }
     }
@@ -101,6 +105,21 @@ impl<'tcx> FnCallStorage<'tcx> {
         self.fn_calls
             .iter()
             .all(|fn_call| self.check_fn_call_purity(fn_call))
-            && self.unhandled_terminators.is_empty()
+            && self.unhandled.is_empty()
+    }
+
+    pub fn dump(&self) -> PurityAnalysisResult<'tcx> {
+        let (passing_calls, failing_calls) = self
+            .fn_calls
+            .clone()
+            .into_iter()
+            .partition(|fn_call| self.check_fn_call_purity(fn_call));
+        PurityAnalysisResult::new(
+            self.def_id,
+            self.check_purity(),
+            passing_calls,
+            failing_calls,
+            self.unhandled.clone(),
+        )
     }
 }

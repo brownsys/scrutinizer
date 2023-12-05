@@ -1,6 +1,8 @@
-mod fn_visitor;
-mod fn_call_storage;
-mod raw_ptr_deref_visitor;
+mod function;
+mod raw_ptr;
+mod result;
+mod storage;
 mod types;
 
-pub use fn_visitor::FnVisitor;
+pub use function::FnVisitor;
+pub use result::PurityAnalysisResult;

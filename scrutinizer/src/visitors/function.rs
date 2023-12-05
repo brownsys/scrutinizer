@@ -15,8 +15,8 @@ use rustc_utils::PlaceExt;
 use flowistry::indexed::impls::LocationOrArg;
 use flowistry::infoflow::Direction;
 
-use super::fn_call_storage::FnCallStorage;
-use super::raw_ptr_deref_visitor::has_raw_ptr_deref;
+use super::raw_ptr::has_raw_ptr_deref;
+use super::storage::FnCallStorage;
 use super::types::{ArgTy, FnCallInfo};
 use crate::vartrack::compute_dependent_locals;
 
@@ -90,7 +90,7 @@ impl<'tcx> Visitor<'tcx> for FnVisitor<'tcx> {
             } else {
                 self.storage
                     .borrow_mut()
-                    .add_terminator(terminator.to_owned());
+                    .add_unhandled(terminator.to_owned());
             }
         }
         self.super_terminator(terminator, location);
@@ -107,6 +107,13 @@ impl<'tcx> FnVisitor<'tcx> {
         important_args: Vec<usize>,
     ) {
         let instances = {
+            // Resolve function instance.
+            let maybe_instance =
+                Instance::resolve(self.tcx, ParamEnv::reveal_all(), def_id, substs).unwrap();
+            let def_id = match maybe_instance {
+                Some(instance) => instance.def_id(),
+                None => def_id,
+            };
             // All possible closure shims that we need to analyze.
             let closure_shims = vec![
                 Regex::new(r"core\[\w*\]::ops::function::FnMut::call_mut").unwrap(),
@@ -115,29 +122,24 @@ impl<'tcx> FnVisitor<'tcx> {
             ];
             let def_path_str = format!("{:?}", def_id);
 
-            if closure_shims.iter().any(|lib| lib.is_match(&def_path_str)) {
-                // Extract closure influences, as we have encountered a closure shim.
+            if closure_shims.iter().any(|lib| lib.is_match(&def_path_str))
+                && !self.tcx.is_mir_available(def_id)
+            {
+                // Extract closure influences, as we have encountered an opaque closure shim.
                 let closure_influences = self.extract_closure_influences(&arg_tys);
                 // Check if there are any closure influences, return intact shim if not.
                 if closure_influences.is_empty() {
-                    vec![(None, def_id)]
+                    vec![(maybe_instance, def_id)]
                 } else {
                     closure_influences
                 }
             } else {
-                // Resolve function instance.
-                let maybe_instance =
-                    Instance::resolve(self.tcx, ParamEnv::reveal_all(), def_id, substs).unwrap();
-                match maybe_instance {
-                    Some(instance) => vec![(Some(instance), instance.def_id())],
-                    None => vec![(None, def_id)],
-                }
+                vec![(maybe_instance, def_id)]
             }
         };
 
         for (maybe_instance, def_id) in instances.into_iter() {
             // Only if we have not seen this call before.
-            // TODO: this is no longer valid, think about handling recursive call chains.
             if !self.storage.borrow().encountered_def_id(def_id) {
                 if self.tcx.is_const_fn_raw(def_id) {
                     return;
@@ -183,6 +185,7 @@ impl<'tcx> FnVisitor<'tcx> {
     }
 
     pub fn new(
+        def_id: DefId,
         tcx: TyCtxt<'tcx>,
         current_arg_tys: Vec<ArgTy<'tcx>>,
         current_def_id: DefId,
@@ -192,7 +195,7 @@ impl<'tcx> FnVisitor<'tcx> {
     ) -> Self {
         Self {
             tcx,
-            storage: Rc::new(RefCell::new(FnCallStorage::new())),
+            storage: Rc::new(RefCell::new(FnCallStorage::new(def_id))),
             current_arg_tys,
             current_def_id,
             current_body,
