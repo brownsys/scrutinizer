@@ -4,6 +4,7 @@ mod vartrack;
 mod visitors;
 
 use vartrack::compute_dependent_locals;
+use visitors::ArgTy;
 use visitors::{FnVisitor, PurityAnalysisResult};
 
 extern crate rustc_borrowck;
@@ -142,6 +143,13 @@ fn scrutinizer<'tcx>(
 
                     let deps = compute_dependent_locals(tcx, def_id, targets, Direction::Forward);
 
+                    let arg_tys: Vec<ArgTy> = (1..=main_body.arg_count)
+                        .map(|local| {
+                            let arg_ty = main_body.local_decls[local.into()].ty;
+                            ArgTy::Simple(arg_ty)
+                        })
+                        .collect();
+
                     let main_instance = ty::Instance::mono(tcx, def_id);
 
                     let mutable = fn_sig.decl.inputs.iter().any(|arg| {
@@ -162,8 +170,15 @@ fn scrutinizer<'tcx>(
                         ));
                     }
 
-                    let mut visitor =
-                        FnVisitor::new(def_id, tcx, vec![], def_id, main_body, main_instance, deps);
+                    let mut visitor = FnVisitor::new(
+                        def_id,
+                        tcx,
+                        arg_tys,
+                        def_id,
+                        main_body,
+                        main_instance,
+                        deps,
+                    );
                     // Begin the traversal.
                     visitor.visit_body(main_body);
                     Some(visitor.get_storage_clone().dump())

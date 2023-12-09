@@ -7,7 +7,7 @@ use rustc_span::Span;
 #[derive(Debug, Clone)]
 pub enum ArgTy<'tcx> {
     Simple(Ty<'tcx>),
-    WithClosureInfluences(Ty<'tcx>, Vec<Ty<'tcx>>),
+    WithCallableInfluences(Ty<'tcx>, Vec<Ty<'tcx>>),
 }
 
 impl<'tcx> Serialize for ArgTy<'tcx> {
@@ -21,9 +21,9 @@ impl<'tcx> Serialize for ArgTy<'tcx> {
                 tv.serialize_field("ty", format!("{:?}", ty).as_str())?;
                 tv.end()
             }
-            ArgTy::WithClosureInfluences(ref ty, ref vec_ty) => {
+            ArgTy::WithCallableInfluences(ref ty, ref vec_ty) => {
                 let mut tv =
-                    serializer.serialize_struct_variant("ArgTy", 1, "WithClosureInfluences", 2)?;
+                    serializer.serialize_struct_variant("ArgTy", 1, "WithCallableInfluences", 2)?;
                 tv.serialize_field("ty", format!("{:?}", ty).as_str())?;
                 tv.serialize_field(
                     "inlfluences",

@@ -1,15 +1,9 @@
-use itertools::Itertools;
-use regex::Regex;
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use rustc_hir::def_id::DefId;
-use rustc_middle::mir::{
-    visit::Visitor, Body, Local, Location, Operand, Place, Terminator, TerminatorKind,
-};
-use rustc_middle::ty::{
-    subst::GenericArgKind, subst::SubstsRef, FnDef, Instance, ParamEnv, Ty, TyCtxt, TyKind,
-};
+use rustc_middle::mir::{visit::Visitor, Body, Local, Location, Place, Terminator, TerminatorKind};
+use rustc_middle::ty::{subst::SubstsRef, FnDef, Instance, ParamEnv, TyCtxt};
 use rustc_utils::PlaceExt;
 
 use flowistry::indexed::impls::LocationOrArg;
@@ -18,6 +12,9 @@ use flowistry::infoflow::Direction;
 use super::raw_ptr::has_raw_ptr_deref;
 use super::storage::FnCallStorage;
 use super::types::{ArgTy, FnCallInfo};
+use super::util::{
+    extract_callable_deps, extract_callable_influences, is_type_erased_closure_call,
+};
 use crate::vartrack::compute_dependent_locals;
 
 pub struct FnVisitor<'tcx> {
@@ -54,17 +51,23 @@ impl<'tcx> Visitor<'tcx> for FnVisitor<'tcx> {
                 let arg_tys: Vec<ArgTy> = args
                     .iter()
                     .map(|arg| {
-                        let backward_deps = self.extract_backwards_deps(arg, &location);
+                        let backward_deps = extract_callable_deps(
+                            arg,
+                            &location,
+                            &self.current_arg_tys,
+                            self.current_def_id,
+                            self.current_body,
+                            self.tcx,
+                        );
                         let arg_ty = arg.ty(self.current_body, self.tcx);
 
                         if backward_deps.is_empty() {
                             ArgTy::Simple(arg_ty)
                         } else {
-                            ArgTy::WithClosureInfluences(arg_ty, backward_deps)
+                            ArgTy::WithCallableInfluences(arg_ty, backward_deps)
                         }
                     })
                     .collect();
-
                 // Select all arguments that appear in this function call.
                 let important_args: Vec<usize> = args
                     .iter()
@@ -82,7 +85,6 @@ impl<'tcx> Visitor<'tcx> for FnVisitor<'tcx> {
                             })
                     })
                     .collect();
-
                 // Only check there are some important args.
                 if !important_args.is_empty() {
                     self.visit_fn_call(*def_id, substs, arg_tys.clone(), *fn_span, important_args);
@@ -106,6 +108,7 @@ impl<'tcx> FnVisitor<'tcx> {
         call_span: rustc_span::Span,
         important_args: Vec<usize>,
     ) {
+        // All instances that need to be analyzed, including influences.
         let instances = {
             // Resolve function instance.
             let maybe_instance =
@@ -115,23 +118,24 @@ impl<'tcx> FnVisitor<'tcx> {
                 None => def_id,
             };
             // All possible closure shims that we need to analyze.
-            let closure_shims = vec![
-                Regex::new(r"core\[\w*\]::ops::function::FnMut::call_mut").unwrap(),
-                Regex::new(r"core\[\w*\]::ops::function::FnOnce::call_once").unwrap(),
-                Regex::new(r"core\[\w*\]::ops::function::Fn::call").unwrap(),
-            ];
-            let def_path_str = format!("{:?}", def_id);
-
-            if closure_shims.iter().any(|lib| lib.is_match(&def_path_str))
-                && !self.tcx.is_mir_available(def_id)
-            {
+            if is_type_erased_closure_call(def_id, self.tcx) {
+                let closure_arg_ty = arg_tys[0].to_owned();
                 // Extract closure influences, as we have encountered an opaque closure shim.
-                let closure_influences = self.extract_closure_influences(&arg_tys);
+                let maybe_callable_influences =
+                    extract_callable_influences(&closure_arg_ty, self.tcx);
                 // Check if there are any closure influences, return intact shim if not.
-                if closure_influences.is_empty() {
-                    vec![(maybe_instance, def_id)]
-                } else {
-                    closure_influences
+                match maybe_callable_influences {
+                    Ok(callable_influences) => {
+                        if callable_influences.is_empty() {
+                            vec![(maybe_instance, def_id)]
+                        } else {
+                            callable_influences
+                                .into_iter()
+                                .map(|instance| (Some(instance), instance.def_id()))
+                                .collect()
+                        }
+                    }
+                    Err(_) => vec![(maybe_instance, def_id)],
                 }
             } else {
                 vec![(maybe_instance, def_id)]
@@ -225,93 +229,5 @@ impl<'tcx> FnVisitor<'tcx> {
 
     pub fn get_storage_clone(&self) -> FnCallStorage<'tcx> {
         self.storage.borrow().to_owned()
-    }
-
-    fn extract_closure_influences(
-        &self,
-        arg_tys: &Vec<ArgTy<'tcx>>,
-    ) -> Vec<(Option<Instance<'tcx>>, DefId)> {
-        arg_tys
-            .iter()
-            .map(|arg_ty| match arg_ty {
-                ArgTy::Simple(ty) => {
-                    let maybe_ty = ty.walk().find(|ty| match ty.unpack() {
-                        GenericArgKind::Type(ty) => ty.is_closure(),
-                        _ => false,
-                    });
-                    if let Some(ty) = maybe_ty {
-                        vec![ty.expect_ty()]
-                    } else {
-                        vec![]
-                    }
-                }
-                ArgTy::WithClosureInfluences(ty, influences) => {
-                    let mut new_influences = influences.to_owned();
-                    new_influences.push(ty.to_owned());
-                    new_influences
-                        .iter()
-                        .filter_map(|ty| {
-                            ty.walk().find(|ty| match ty.unpack() {
-                                GenericArgKind::Type(ty) => ty.is_closure(),
-                                _ => false,
-                            })
-                        })
-                        .map(|ty| ty.expect_ty())
-                        .collect()
-                }
-            })
-            .flatten()
-            .filter_map(|closure| match closure.kind() {
-                TyKind::Closure(def_id, substs) => {
-                    Instance::resolve(self.tcx, ParamEnv::reveal_all(), def_id.to_owned(), substs)
-                        .unwrap()
-                        .and_then(|instance| Some((Some(instance), instance.def_id())))
-                }
-                _ => None,
-            })
-            .unique()
-            .collect()
-    }
-
-    fn extract_backwards_deps(&self, arg: &Operand<'tcx>, location: &Location) -> Vec<Ty<'tcx>> {
-        let backward_deps = arg.place().and_then(|place| {
-            let targets = vec![vec![(place, LocationOrArg::Location(location.to_owned()))]];
-            Some(compute_dependent_locals(
-                self.tcx,
-                self.current_def_id,
-                targets,
-                Direction::Backward,
-            ))
-        });
-        // Retrieve backwards dependencies' types.
-        backward_deps
-            .into_iter()
-            .map(|backward_deps_for_local| {
-                backward_deps_for_local
-                    .into_iter()
-                    .map(|local| {
-                        let mut dependent_types =
-                            if local.index() != 0 && local.index() <= self.current_arg_tys.len() {
-                                match self.current_arg_tys[local.index() - 1] {
-                                    ArgTy::Simple(ty) => vec![ty],
-                                    ArgTy::WithClosureInfluences(ty, ref influences) => {
-                                        let mut new_influences = influences.to_owned();
-                                        new_influences.push(ty);
-                                        new_influences
-                                    }
-                                }
-                            } else {
-                                vec![]
-                            };
-                        dependent_types.push(self.current_body.local_decls[local].ty);
-                        dependent_types
-                    })
-                    .flatten()
-                    .filter(|ty| ty.contains_closure())
-                    .collect::<Vec<_>>()
-            })
-            .flatten()
-            .unique()
-            .collect()
     }
 }

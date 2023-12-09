@@ -23,10 +23,10 @@ pub fn execute<F: FnOnce(usize) -> usize>(x: usize, l: F) -> usize {
 // This example *might* drop types, but it doesn't happen in this case.
 #[inline]
 #[must_use]
-pub const fn execute_destruct<T, F: ~ const FnOnce(&T) -> bool>(x: T, l: F) -> bool
-    where
-        T: ~ const Destruct,
-        F: ~ const Destruct,
+pub const fn execute_destruct<T, F: ~const FnOnce(&T) -> bool>(x: T, l: F) -> bool
+where
+    T: ~const Destruct,
+    F: ~const Destruct,
 {
     l(&x)
 }
@@ -46,22 +46,22 @@ pub fn closure_test(a: usize) {
     };
 
     let y = 42;
-    let closure_capture = |x: usize| -> usize  {
+    let closure_capture = |x: usize| -> usize {
         return x * y;
     };
 
     let y = 42;
-    let closure_capture_move = move |x: usize| -> usize  {
+    let closure_capture_move = move |x: usize| -> usize {
         return x * y;
     };
 
     let y = 42;
     let ambiguous_lambda = if y > 5 {
-        |x: usize| -> usize  {
+        |x: usize| -> usize {
             return x;
         }
     } else {
-        |x: usize| -> usize  {
+        |x: usize| -> usize {
             return x * x;
         }
     };
@@ -72,4 +72,26 @@ pub fn closure_test(a: usize) {
     // execute(a, closure_capture);
     // execute(a, closure_capture_move);
     // execute(a, ambiguous_lambda);
+}
+
+pub fn partially_opaque(sensitive_attr: usize, flag: bool, l1: &dyn Fn(usize) -> usize) -> usize {
+    let l2 = |x: usize| -> usize {
+        return x * x;
+    };
+
+    let lambda = if flag {
+        l1
+    } else {
+        &l2
+    };
+
+    lambda(sensitive_attr)
+}
+
+pub fn resolved_partially_opaque(sensitive_attr: usize, flag: bool) -> usize {
+    let lambda = |x: usize| -> usize {
+        return x * x;
+    };
+
+    partially_opaque(sensitive_attr, flag, &lambda)
 }
