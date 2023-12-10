@@ -1,11 +1,11 @@
 #![feature(rustc_private)]
 
 mod vartrack;
-mod visitors;
+mod analyzer;
 
 use vartrack::compute_dependent_locals;
-use visitors::ArgTy;
-use visitors::{FnVisitor, PurityAnalysisResult};
+use analyzer::ArgTy;
+use analyzer::{FnVisitor, PurityAnalysisResult};
 
 extern crate rustc_borrowck;
 extern crate rustc_data_structures;
