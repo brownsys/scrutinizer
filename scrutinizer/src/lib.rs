@@ -1,11 +1,11 @@
 #![feature(rustc_private)]
 
-mod vartrack;
 mod analyzer;
+mod vartrack;
 
-use vartrack::compute_dependent_locals;
 use analyzer::ArgTy;
 use analyzer::{FnVisitor, PurityAnalysisResult};
+use vartrack::compute_dependent_locals;
 
 extern crate rustc_borrowck;
 extern crate rustc_data_structures;
@@ -23,7 +23,7 @@ use flowistry::indexed::impls::LocationOrArg;
 use flowistry::infoflow::Direction;
 use serde::{Deserialize, Serialize};
 
-use rustc_hir::{GenericParamKind, ItemKind, TyKind};
+use rustc_hir::{GenericParamKind, ItemId, ItemKind, TyKind};
 use rustc_middle::mir::{visit::Visitor, Local, Mutability, Place};
 use rustc_middle::ty;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
@@ -97,97 +97,97 @@ fn scrutinizer<'tcx>(
     tcx: ty::TyCtxt<'tcx>,
     args: &ScrutinizerPluginArgs,
 ) -> Vec<PurityAnalysisResult<'tcx>> {
-    let hir = tcx.hir();
-    hir.items()
-        .filter_map(|item_id| {
-            let item = hir.item(item_id);
-            let def_id = item.owner_id.to_def_id();
-            // Find the desired function by name.
-            if args.function.as_str().is_empty()
-                || item.ident.name == rustc_span::symbol::Symbol::intern(args.function.as_str())
-            {
-                if let ItemKind::Fn(fn_sig, generics, _) = &item.kind {
-                    if !generics.params.iter().all(|generic| {
-                        if let GenericParamKind::Lifetime { .. } = generic.kind {
-                            true
-                        } else {
-                            false
-                        }
-                    }) {
-                        return Some(PurityAnalysisResult::new(
-                            def_id,
-                            false,
-                            vec![],
-                            vec![],
-                            vec![],
-                        ));
-                    }
-
-                    let main_body = tcx.optimized_mir(def_id);
-
-                    let important_args = if args.important_args.is_empty() {
-                        let n_args = fn_sig.decl.inputs.len();
-                        (1..=n_args).collect()
-                    } else {
-                        args.important_args.clone()
-                    };
-
-                    let targets = vec![important_args
-                        .iter()
-                        .map(|arg| {
-                            let arg_local = Local::from_usize(*arg);
-                            let arg_place = Place::make(arg_local, &[], tcx);
-                            return (arg_place, LocationOrArg::Arg(arg_local));
-                        })
-                        .collect::<Vec<_>>()];
-
-                    let deps = compute_dependent_locals(tcx, def_id, targets, Direction::Forward);
-
-                    let arg_tys: Vec<ArgTy> = (1..=main_body.arg_count)
-                        .map(|local| {
-                            let arg_ty = main_body.local_decls[local.into()].ty;
-                            ArgTy::Simple(arg_ty)
-                        })
-                        .collect();
-
-                    let main_instance = ty::Instance::mono(tcx, def_id);
-
-                    let mutable = fn_sig.decl.inputs.iter().any(|arg| {
-                        if let TyKind::Ref(_, mut_ty) = &arg.kind {
-                            if mut_ty.mutbl == Mutability::Mut {
-                                return true;
-                            }
-                        }
-                        return false;
-                    });
-                    if mutable {
-                        return Some(PurityAnalysisResult::new(
-                            def_id,
-                            false,
-                            vec![],
-                            vec![],
-                            vec![],
-                        ));
-                    }
-
-                    let mut visitor = FnVisitor::new(
-                        def_id,
-                        tcx,
-                        arg_tys,
-                        def_id,
-                        main_body,
-                        main_instance,
-                        deps,
-                    );
-                    // Begin the traversal.
-                    visitor.visit_body(main_body);
-                    Some(visitor.get_storage_clone().dump())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
+    tcx.hir()
+        .items()
+        .filter_map(|item_id| analyze_item(item_id, tcx.to_owned(), args))
         .collect()
+}
+
+fn analyze_item<'tcx>(
+    item_id: ItemId,
+    tcx: ty::TyCtxt<'tcx>,
+    args: &ScrutinizerPluginArgs,
+) -> Option<PurityAnalysisResult<'tcx>> {
+    let hir = tcx.hir();
+    let item = hir.item(item_id);
+    let def_id = item.owner_id.to_def_id();
+    // Find the desired function by name.
+    if args.function.as_str().is_empty()
+        || item.ident.name == rustc_span::symbol::Symbol::intern(args.function.as_str())
+    {
+        if let ItemKind::Fn(fn_sig, generics, _) = &item.kind {
+            if !generics.params.iter().all(|generic| {
+                if let GenericParamKind::Lifetime { .. } = generic.kind {
+                    true
+                } else {
+                    false
+                }
+            }) {
+                return Some(PurityAnalysisResult::new(
+                    def_id,
+                    false,
+                    vec![],
+                    vec![],
+                    vec![],
+                ));
+            }
+
+            let main_body = tcx.optimized_mir(def_id);
+
+            let important_args = if args.important_args.is_empty() {
+                let n_args = fn_sig.decl.inputs.len();
+                (1..=n_args).collect()
+            } else {
+                args.important_args.clone()
+            };
+
+            let targets = vec![important_args
+                .iter()
+                .map(|arg| {
+                    let arg_local = Local::from_usize(*arg);
+                    let arg_place = Place::make(arg_local, &[], tcx);
+                    return (arg_place, LocationOrArg::Arg(arg_local));
+                })
+                .collect::<Vec<_>>()];
+
+            let deps = compute_dependent_locals(tcx, def_id, targets, Direction::Forward);
+
+            let arg_tys: Vec<ArgTy> = (1..=main_body.arg_count)
+                .map(|local| {
+                    let arg_ty = main_body.local_decls[local.into()].ty;
+                    ArgTy::Simple(arg_ty)
+                })
+                .collect();
+
+            let main_instance = ty::Instance::mono(tcx, def_id);
+
+            let mutable = fn_sig.decl.inputs.iter().any(|arg| {
+                if let TyKind::Ref(_, mut_ty) = &arg.kind {
+                    if mut_ty.mutbl == Mutability::Mut {
+                        return true;
+                    }
+                }
+                return false;
+            });
+            if mutable {
+                return Some(PurityAnalysisResult::new(
+                    def_id,
+                    false,
+                    vec![],
+                    vec![],
+                    vec![],
+                ));
+            }
+
+            let mut visitor =
+                FnVisitor::new(def_id, tcx, arg_tys, def_id, main_body, main_instance, deps);
+            // Begin the traversal.
+            visitor.visit_body(main_body);
+            Some(visitor.get_storage_clone().dump())
+        } else {
+            None
+        }
+    } else {
+        None
+    }
 }

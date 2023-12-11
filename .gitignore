@@ -39,5 +39,4 @@ Temporary Items
 # Project specific
 nll-facts
 *.log
-rustlib
 *.result.json
