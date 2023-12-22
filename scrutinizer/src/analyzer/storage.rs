@@ -5,7 +5,6 @@ use regex::Regex;
 
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::Terminator;
-use rustc_middle::ty::TyCtxt;
 
 #[derive(Clone)]
 pub struct FnCallStorage<'tcx> {
@@ -42,48 +41,11 @@ impl<'tcx> FnCallStorage<'tcx> {
         })
     }
 
-    pub fn print_passing(&self, tcx: TyCtxt<'tcx>) {
-        for fn_call in self.fn_calls.iter() {
-            if self.check_fn_call_purity(fn_call) {
-                println!("--> Passing function call: {:#?}", fn_call);
-                match fn_call {
-                    FnCallInfo::WithBody { body_span, .. } => {
-                        let body_snippet =
-                            tcx.sess.source_map().span_to_snippet(*body_span).unwrap();
-                        println!("Body snippet: {:?}", body_snippet);
-                    }
-                    FnCallInfo::WithoutBody { .. } => (),
-                }
-            }
-        }
-    }
-
-    pub fn print_failing(&self, tcx: TyCtxt<'tcx>) {
-        for fn_call in self.fn_calls.iter() {
-            if !self.check_fn_call_purity(fn_call) {
-                println!("--> Failing function call: {:#?}", fn_call);
-                match fn_call {
-                    FnCallInfo::WithBody { body_span, .. } => {
-                        let body_snippet =
-                            tcx.sess.source_map().span_to_snippet(*body_span).unwrap();
-                        println!("Body snippet: {:?}", body_snippet);
-                    }
-                    FnCallInfo::WithoutBody { .. } => (),
-                }
-            }
-        }
-    }
-
-    pub fn print_unhandled(&self) {
-        for unhandled_terminator in self.unhandled.iter() {
-            println!("--> Unhandled terminator: {:#?}", unhandled_terminator);
-        }
-    }
-
     fn check_fn_call_purity(&self, fn_call: &FnCallInfo) -> bool {
         let allowed_libs = vec![
             Regex::new(r"core\[\w*\]::intrinsics").unwrap(),
             Regex::new(r"core\[\w*\]::panicking").unwrap(),
+            Regex::new(r"alloc\[\w*\]::alloc").unwrap(),
         ];
         match fn_call {
             FnCallInfo::WithBody {
@@ -114,12 +76,35 @@ impl<'tcx> FnCallStorage<'tcx> {
             .clone()
             .into_iter()
             .partition(|fn_call| self.check_fn_call_purity(fn_call));
-        PurityAnalysisResult::new(
-            self.def_id,
-            self.check_purity(),
-            passing_calls,
-            failing_calls,
-            self.unhandled.clone(),
-        )
+        if !self.check_purity() {
+            let reason = if !self.unhandled.is_empty() {
+                String::from("unhandled terminator")
+            } else if !self
+                .fn_calls
+                .iter()
+                .all(|fn_call| self.check_fn_call_purity(fn_call))
+            {
+                String::from("unable to ascertain purity of inner function call")
+            } else {
+                unreachable!()
+            };
+            PurityAnalysisResult::new(
+                self.def_id,
+                self.check_purity(),
+                reason,
+                passing_calls,
+                failing_calls,
+                self.unhandled.clone(),
+            )
+        } else {
+            PurityAnalysisResult::new(
+                self.def_id,
+                self.check_purity(),
+                String::new(),
+                passing_calls,
+                failing_calls,
+                self.unhandled.clone(),
+            )
+        }
     }
 }

@@ -126,6 +126,7 @@ fn analyze_item<'tcx>(
                 return Some(PurityAnalysisResult::new(
                     def_id,
                     false,
+                    String::from("unresolved generics detected"),
                     vec![],
                     vec![],
                     vec![],
@@ -173,6 +174,7 @@ fn analyze_item<'tcx>(
                 return Some(PurityAnalysisResult::new(
                     def_id,
                     false,
+                    String::from("mutable arguments detected"),
                     vec![],
                     vec![],
                     vec![],

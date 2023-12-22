@@ -1,3 +1,4 @@
+use chrono::naive::NaiveDateTime;
 use std::cell::RefCell;
 use std::io;
 use std::net::UdpSocket;
@@ -36,4 +37,8 @@ pub fn udp_socket_send(socket: &UdpSocket, buf: &[u8]) -> io::Result<usize> {
 
 pub fn ref_cell_mut(refcell: &RefCell<usize>) {
     *refcell.borrow_mut() = 10;
+}
+
+pub fn date_format(v: NaiveDateTime) -> String {
+    v.format("%Y-%m-%d %H:%M:%S").to_string()
 }

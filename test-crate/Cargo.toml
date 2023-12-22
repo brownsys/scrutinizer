@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 uuid = { version = "1.4.0", features = ["v4", "fast-rng", "macro-diagnostics"] }
+chrono = "0.4.31"

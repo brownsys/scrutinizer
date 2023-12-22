@@ -1,5 +1,3 @@
-use std::marker::Destruct;
-
 pub fn lambda_called(a: usize) -> usize {
     let l = |x| {
         return x * x;
@@ -18,17 +16,6 @@ pub fn lambda_uncalled(a: usize) -> usize {
 // This works fine even with FnOnce or FnMut.
 pub fn execute<F: FnOnce(usize) -> usize>(x: usize, l: F) -> usize {
     l(x)
-}
-
-// This example *might* drop types, but it doesn't happen in this case.
-#[inline]
-#[must_use]
-pub const fn execute_destruct<T, F: ~const FnOnce(&T) -> bool>(x: T, l: F) -> bool
-where
-    T: ~const Destruct,
-    F: ~const Destruct,
-{
-    l(&x)
 }
 
 // This is an example of dynamic dispatch, which does not let compiler determine the type of l.
