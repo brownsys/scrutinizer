@@ -1,9 +1,10 @@
-use super::types::ArgTy;
+use super::arg_ty::ArgTy;
 use crate::vartrack::compute_dependent_locals;
 
 use rustc_hir::def_id::DefId;
-use rustc_middle::mir::{Body, Local, Location, Operand};
+use rustc_middle::mir::{Body, Local, Location, Operand, Place};
 use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_utils::PlaceExt;
 
 use flowistry::indexed::impls::LocationOrArg;
 use flowistry::infoflow::Direction;
@@ -74,13 +75,13 @@ fn extract_subtypes<'tcx>(
 
 pub(super) fn find_plausible_substs<'tcx>(
     def_id: DefId,
-    concrete_tys: Vec<ArgTy<'tcx>>,
+    concrete_tys: &Vec<ArgTy<'tcx>>,
     substs: ty::subst::SubstsRef<'tcx>,
     tcx: TyCtxt<'tcx>,
 ) -> Vec<ty::Instance<'tcx>> {
     let generic_tys = tcx
         .fn_sig(def_id)
-        .skip_binder()
+        .subst_identity()
         .inputs()
         .skip_binder()
         .to_vec();
@@ -157,4 +158,44 @@ fn substitute_genetics<'tcx>(
     } else {
         None
     }
+}
+
+pub fn calculate_important_locals(
+    new_args: &Vec<Operand>,
+    old_important_locals: &Vec<Local>,
+    def_id: DefId,
+    tcx: TyCtxt,
+) -> Vec<Local> {
+    if tcx.is_constructor(def_id) {
+        return vec![];
+    }
+    let important_args: Vec<usize> = new_args
+        .iter()
+        .enumerate()
+        .filter_map(|(i, arg)| {
+            arg.place()
+                .and_then(|place| place.as_local())
+                .and_then(|local| {
+                    if old_important_locals.contains(&local) {
+                        // Need to add 1 because arguments' locals start with 1.
+                        Some(i + 1)
+                    } else {
+                        None
+                    }
+                })
+        })
+        .collect();
+
+    // Construct targets of the arguments.
+    let important_arg_targets = vec![important_args
+        .iter()
+        .map(|arg| {
+            let arg_local = Local::from_usize(*arg);
+            let arg_place = Place::make(arg_local, &[], tcx);
+            (arg_place, LocationOrArg::Arg(arg_local))
+        })
+        .collect()];
+
+    // Compute new dependencies for all important args.
+    compute_dependent_locals(tcx, def_id, important_arg_targets, Direction::Forward)
 }

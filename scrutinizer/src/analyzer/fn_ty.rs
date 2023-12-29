@@ -1,41 +1,16 @@
 use serde::ser::{Serialize, SerializeStructVariant};
 
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::Ty;
+use rustc_middle::mir::Local;
+use rustc_middle::ty;
 use rustc_span::Span;
 
-#[derive(Debug, Clone)]
-pub enum ArgTy<'tcx> {
-    Simple(Ty<'tcx>),
-    Erased(Ty<'tcx>, Vec<Ty<'tcx>>),
-}
+use super::arg_ty::ArgTy;
 
-impl<'tcx> Serialize for ArgTy<'tcx> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match *self {
-            ArgTy::Simple(ref ty) => {
-                let mut tv = serializer.serialize_struct_variant("ArgTy", 0, "Simple", 1)?;
-                tv.serialize_field("ty", format!("{:?}", ty).as_str())?;
-                tv.end()
-            }
-            ArgTy::Erased(ref ty, ref vec_ty) => {
-                let mut tv =
-                    serializer.serialize_struct_variant("ArgTy", 1, "Erased", 2)?;
-                tv.serialize_field("ty", format!("{:?}", ty).as_str())?;
-                tv.serialize_field(
-                    "inlfluences",
-                    &vec_ty
-                        .iter()
-                        .map(|ty| format!("{:?}", ty))
-                        .collect::<Vec<_>>(),
-                )?;
-                tv.end()
-            }
-        }
-    }
+pub struct FnData<'tcx> {
+    pub arg_tys: Vec<ArgTy<'tcx>>,
+    pub instance: ty::Instance<'tcx>,
+    pub important_locals: Vec<Local>,
 }
 
 #[derive(Debug, Clone)]

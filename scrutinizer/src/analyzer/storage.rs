@@ -1,5 +1,5 @@
+use super::fn_ty::FnCallInfo;
 use super::result::PurityAnalysisResult;
-use super::types::FnCallInfo;
 
 use regex::Regex;
 
@@ -70,7 +70,7 @@ impl<'tcx> FnCallStorage<'tcx> {
             && self.unhandled.is_empty()
     }
 
-    pub fn dump(&self) -> PurityAnalysisResult<'tcx> {
+    pub fn dump(&self, annotated_pure: bool) -> PurityAnalysisResult<'tcx> {
         let (passing_calls, failing_calls) = self
             .fn_calls
             .clone()
@@ -90,6 +90,7 @@ impl<'tcx> FnCallStorage<'tcx> {
             };
             PurityAnalysisResult::new(
                 self.def_id,
+                annotated_pure,
                 self.check_purity(),
                 reason,
                 passing_calls,
@@ -99,6 +100,7 @@ impl<'tcx> FnCallStorage<'tcx> {
         } else {
             PurityAnalysisResult::new(
                 self.def_id,
+                annotated_pure,
                 self.check_purity(),
                 String::new(),
                 passing_calls,

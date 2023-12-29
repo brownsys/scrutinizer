@@ -4,7 +4,7 @@ mod analyzer;
 mod vartrack;
 
 use analyzer::ArgTy;
-use analyzer::{FnVisitor, PurityAnalysisResult};
+use analyzer::{FnData, FnVisitor, PurityAnalysisResult};
 use vartrack::compute_dependent_locals;
 
 extern crate rustc_borrowck;
@@ -111,6 +111,12 @@ fn analyze_item<'tcx>(
     let hir = tcx.hir();
     let item = hir.item(item_id);
     let def_id = item.owner_id.to_def_id();
+    let annotated_pure = tcx
+        .get_attr(def_id, rustc_span::symbol::Symbol::intern("doc"))
+        .and_then(|attr| attr.doc_str())
+        .and_then(|symbol| Some(symbol == rustc_span::symbol::Symbol::intern("pure")))
+        .unwrap_or(false);
+
     // Find the desired function by name.
     if args.function.as_str().is_empty()
         || item.ident.name == rustc_span::symbol::Symbol::intern(args.function.as_str())
@@ -125,6 +131,7 @@ fn analyze_item<'tcx>(
             }) {
                 return Some(PurityAnalysisResult::new(
                     def_id,
+                    annotated_pure,
                     false,
                     String::from("unresolved generics detected"),
                     vec![],
@@ -133,7 +140,7 @@ fn analyze_item<'tcx>(
                 ));
             }
 
-            let main_body = tcx.optimized_mir(def_id);
+            let body = tcx.optimized_mir(def_id);
 
             let important_args = if args.important_args.is_empty() {
                 let n_args = fn_sig.decl.inputs.len();
@@ -153,14 +160,14 @@ fn analyze_item<'tcx>(
 
             let deps = compute_dependent_locals(tcx, def_id, targets, Direction::Forward);
 
-            let arg_tys: Vec<ArgTy> = (1..=main_body.arg_count)
+            let arg_tys: Vec<ArgTy> = (1..=body.arg_count)
                 .map(|local| {
-                    let arg_ty = main_body.local_decls[local.into()].ty;
+                    let arg_ty = body.local_decls[local.into()].ty;
                     ArgTy::Simple(arg_ty)
                 })
                 .collect();
 
-            let main_instance = ty::Instance::mono(tcx, def_id);
+            let instance = ty::Instance::mono(tcx, def_id);
 
             let mutable = fn_sig.decl.inputs.iter().any(|arg| {
                 if let TyKind::Ref(_, mut_ty) = &arg.kind {
@@ -173,6 +180,7 @@ fn analyze_item<'tcx>(
             if mutable {
                 return Some(PurityAnalysisResult::new(
                     def_id,
+                    annotated_pure,
                     false,
                     String::from("mutable arguments detected"),
                     vec![],
@@ -181,11 +189,18 @@ fn analyze_item<'tcx>(
                 ));
             }
 
-            let mut visitor =
-                FnVisitor::new(def_id, tcx, arg_tys, def_id, main_body, main_instance, deps);
+            let mut visitor = FnVisitor::new(
+                def_id,
+                tcx,
+                FnData {
+                    arg_tys,
+                    instance,
+                    important_locals: deps,
+                },
+            );
             // Begin the traversal.
-            visitor.visit_body(main_body);
-            Some(visitor.get_storage_clone().dump())
+            visitor.visit_body(body);
+            Some(visitor.get_storage_clone().dump(annotated_pure))
         } else {
             None
         }
