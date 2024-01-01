@@ -1,4 +1,4 @@
-use super::fn_ty::FnCallInfo;
+use super::fn_call_info::FnCallInfo;
 
 use serde::ser::{Serialize, SerializeStruct};
 

@@ -1,4 +1,4 @@
-use super::fn_ty::FnCallInfo;
+use super::fn_call_info::FnCallInfo;
 use super::result::PurityAnalysisResult;
 
 use regex::Regex;
@@ -14,7 +14,7 @@ pub struct FnCallStorage<'tcx> {
 }
 
 impl<'tcx> FnCallStorage<'tcx> {
-    pub(super) fn new(def_id: DefId) -> FnCallStorage<'tcx> {
+    pub fn new(def_id: DefId) -> FnCallStorage<'tcx> {
         Self {
             def_id,
             fn_calls: vec![],
@@ -22,16 +22,16 @@ impl<'tcx> FnCallStorage<'tcx> {
         }
     }
 
-    pub(super) fn add_call(&mut self, new_call: FnCallInfo<'tcx>) {
+    pub fn add_call(&mut self, new_call: FnCallInfo<'tcx>) {
         self.fn_calls.push(new_call);
     }
 
-    pub(super) fn add_unhandled(&mut self, new_unhandled: Terminator<'tcx>) {
+    pub fn add_unhandled(&mut self, new_unhandled: Terminator<'tcx>) {
         self.unhandled.push(new_unhandled);
     }
 
     // TODO: this is no longer valid, think about handling recursive call chains.
-    pub(super) fn encountered_def_id(&self, def_id: DefId) -> bool {
+    pub fn encountered_def_id(&self, def_id: DefId) -> bool {
         self.fn_calls.iter().any(|fn_call_info| {
             let fn_call_info_def_id = match fn_call_info {
                 FnCallInfo::WithBody { def_id, .. } => def_id,

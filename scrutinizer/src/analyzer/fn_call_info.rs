@@ -1,17 +1,10 @@
 use serde::ser::{Serialize, SerializeStructVariant};
 
 use rustc_hir::def_id::DefId;
-use rustc_middle::mir::Local;
-use rustc_middle::ty;
+
 use rustc_span::Span;
 
 use super::arg_ty::ArgTy;
-
-pub struct FnData<'tcx> {
-    pub arg_tys: Vec<ArgTy<'tcx>>,
-    pub instance: ty::Instance<'tcx>,
-    pub important_locals: Vec<Local>,
-}
 
 #[derive(Debug, Clone)]
 pub enum FnCallInfo<'tcx> {

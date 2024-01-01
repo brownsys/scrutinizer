@@ -3,7 +3,7 @@
 mod analyzer;
 mod vartrack;
 
-use analyzer::ArgTy;
+use analyzer::{ArgTy, ImportantLocals};
 use analyzer::{FnData, FnVisitor, PurityAnalysisResult};
 use vartrack::compute_dependent_locals;
 
@@ -123,13 +123,14 @@ fn analyze_item<'tcx>(
         || item.ident.name == rustc_span::symbol::Symbol::intern(args.function.as_str())
     {
         if let ItemKind::Fn(fn_sig, generics, _) = &item.kind {
-            if !generics.params.iter().all(|generic| {
-                if let GenericParamKind::Lifetime { .. } = generic.kind {
-                    true
-                } else {
-                    false
-                }
-            }) {
+            // Check for unresolved generic types or consts.
+            let contains_unresolved_generics =
+                generics.params.iter().any(|generic| match generic.kind {
+                    GenericParamKind::Lifetime { .. } => false,
+                    GenericParamKind::Type { .. } => true,
+                    GenericParamKind::Const { .. } => true,
+                });
+            if contains_unresolved_generics {
                 return Some(PurityAnalysisResult::new(
                     def_id,
                     annotated_pure,
@@ -141,44 +142,15 @@ fn analyze_item<'tcx>(
                 ));
             }
 
-            let body = tcx.optimized_mir(def_id);
-
-            let important_args = if args.important_args.is_empty() {
-                let n_args = fn_sig.decl.inputs.len();
-                (1..=n_args).collect()
-            } else {
-                args.important_args.clone()
-            };
-
-            let targets = vec![important_args
-                .iter()
-                .map(|arg| {
-                    let arg_local = Local::from_usize(*arg);
-                    let arg_place = Place::make(arg_local, &[], tcx);
-                    return (arg_place, LocationOrArg::Arg(arg_local));
-                })
-                .collect::<Vec<_>>()];
-
-            let deps = compute_dependent_locals(tcx, def_id, targets, Direction::Forward);
-
-            let arg_tys: Vec<ArgTy> = (1..=body.arg_count)
-                .map(|local| {
-                    let arg_ty = body.local_decls[local.into()].ty;
-                    ArgTy::Simple(arg_ty)
-                })
-                .collect();
-
-            let instance = ty::Instance::mono(tcx, def_id);
-
-            let mutable = fn_sig.decl.inputs.iter().any(|arg| {
+            // Check for mutable arguments.
+            let contains_mutable_args = fn_sig.decl.inputs.iter().any(|arg| {
                 if let TyKind::Ref(_, mut_ty) = &arg.kind {
-                    if mut_ty.mutbl == Mutability::Mut {
-                        return true;
-                    }
+                    return mut_ty.mutbl == Mutability::Mut;
+                } else {
+                    return false;
                 }
-                return false;
             });
-            if mutable {
+            if contains_mutable_args {
                 return Some(PurityAnalysisResult::new(
                     def_id,
                     annotated_pure,
@@ -190,17 +162,57 @@ fn analyze_item<'tcx>(
                 ));
             }
 
+            // Calculate important locals.
+            let important_locals = {
+                // Parse important arguments.
+                let important_args = if args.important_args.is_empty() {
+                    // If no important arguments are provided, assume all are important.
+                    let n_args = fn_sig.decl.inputs.len();
+                    (1..=n_args).collect()
+                } else {
+                    args.important_args.clone()
+                };
+                let targets = vec![important_args
+                    .iter()
+                    .map(|arg| {
+                        let arg_local = Local::from_usize(*arg);
+                        let arg_place = Place::make(arg_local, &[], tcx);
+                        return (arg_place, LocationOrArg::Arg(arg_local));
+                    })
+                    .collect::<Vec<_>>()];
+                ImportantLocals::new(compute_dependent_locals(
+                    tcx,
+                    def_id,
+                    targets,
+                    Direction::Forward,
+                ))
+            };
+
+            // Retrieve body.
+            let body = tcx.optimized_mir(def_id);
+
+            // Create initial argument types.
+            let arg_tys: Vec<ArgTy> = (1..=body.arg_count)
+                .map(|local| {
+                    let arg_ty = body.local_decls[local.into()].ty;
+                    ArgTy::Simple(arg_ty)
+                })
+                .collect();
+
+            // Retrieve the instance, as we know it exists.
+            let instance = ty::Instance::mono(tcx, def_id);
+
+            // Construct the visitor.
             let mut visitor = FnVisitor::new(
                 def_id,
                 tcx,
-                FnData {
-                    arg_tys,
-                    instance,
-                    important_locals: deps,
-                },
+                FnData::new(arg_tys, instance, important_locals),
             );
+
             // Begin the traversal.
             visitor.visit_body(body);
+
+            // Dump traversal results.
             Some(visitor.get_storage_clone().dump(annotated_pure))
         } else {
             None

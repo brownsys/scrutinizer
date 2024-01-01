@@ -4,9 +4,10 @@
 #![allow(dead_code, unused_variables)]
 
 mod btreemap;
+mod dyn_test;
 mod hashmap;
 mod hashset;
-// mod lambdas;
+mod lambdas;
 mod linked_list;
 mod misc;
 mod raw_ptr;

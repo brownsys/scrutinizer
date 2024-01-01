@@ -1,10 +1,10 @@
 use serde::ser::{Serialize, SerializeStructVariant};
 
 use rustc_middle::mir::{Location, Operand};
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{Ty, TyCtxt};
 
-use super::fn_ty::FnData;
-use super::util::extract_deps;
+use super::fn_data::FnData;
+use super::ty_ext::TyExt;
 
 #[derive(Debug, Clone)]
 pub enum ArgTy<'tcx> {
@@ -13,33 +13,39 @@ pub enum ArgTy<'tcx> {
 }
 
 impl<'tcx> ArgTy<'tcx> {
-    pub fn from_operand(
+    pub fn from_known_or_erased(
         arg: &Operand<'tcx>,
         location: &Location,
         current_fn: &FnData<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> Self {
-        let outer_body = tcx.optimized_mir(current_fn.instance.def_id());
+        let outer_body = tcx.optimized_mir(current_fn.get_instance().def_id());
         let arg_ty = arg.ty(outer_body, tcx);
-        if arg_ty.walk().any(|ty| match ty.unpack() {
-            ty::GenericArgKind::Type(ty) => ty.is_trait(),
-            _ => false,
-        }) {
-            let backward_deps = extract_deps(
-                arg,
-                location,
-                &current_fn.arg_tys,
-                current_fn.instance.def_id(),
-                outer_body,
-                tcx,
-            );
+        // Check whether argument type was erased.
+        if arg_ty.contains_trait() {
+            let backward_deps = current_fn.deps_for(arg, location, tcx);
             ArgTy::Erased(arg_ty, backward_deps)
         } else {
             ArgTy::Simple(arg_ty)
         }
     }
-    pub fn from_ty(arg_ty: Ty<'tcx>) -> Self {
+    pub fn from_known(arg_ty: Ty<'tcx>) -> Self {
         ArgTy::Simple(arg_ty)
+    }
+    pub fn is_poisoned(&self) -> bool {
+        // If one of the influences in the erased type is erased itself,
+        // we consider it poisoned, as it can never be resolved with certainty.
+        // TODO: Can it ever happen if we reject functions with generic arguments?
+        match self {
+            ArgTy::Simple(_) => false,
+            ArgTy::Erased(_, influences) => influences.iter().any(|ty| ty.contains_trait()),
+        }
+    }
+    pub fn into_vec(self) -> Vec<Ty<'tcx>> {
+        match self {
+            ArgTy::Simple(ty) => vec![ty],
+            ArgTy::Erased(ty, subst_tys) => subst_tys.into_iter().chain([ty]).collect(),
+        }
     }
 }
 
