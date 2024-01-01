@@ -1,3 +1,4 @@
+#[doc = "pure"]
 pub fn lambda_called(a: usize) -> usize {
     let l = |x| {
         return x * x;
@@ -6,6 +7,7 @@ pub fn lambda_called(a: usize) -> usize {
     l(a)
 }
 
+#[doc = "pure"]
 pub fn lambda_uncalled(a: usize) -> usize {
     let _l = |x: usize| -> usize {
         return x * x;
@@ -14,15 +16,18 @@ pub fn lambda_uncalled(a: usize) -> usize {
 }
 
 // This works fine even with FnOnce or FnMut.
+#[doc = "impure"]
 pub fn execute<F: FnOnce(usize) -> usize>(x: usize, l: F) -> usize {
     l(x)
 }
 
 // This is an example of dynamic dispatch, which does not let compiler determine the type of l.
+#[doc = "impure"]
 pub fn execute_dyn(x: usize, l: &dyn Fn(usize) -> usize) -> usize {
     l(x)
 }
 
+#[doc = "pure"]
 pub fn closure_test(a: usize) {
     let lambda = |x: usize| -> usize {
         return x * x;
@@ -61,6 +66,7 @@ pub fn closure_test(a: usize) {
     // execute(a, ambiguous_lambda);
 }
 
+#[doc = "impure"]
 pub fn partially_opaque(sensitive_attr: usize, flag: bool, l1: &dyn Fn(usize) -> usize) -> usize {
     let l2 = |x: usize| -> usize {
         return x * x;
@@ -75,6 +81,7 @@ pub fn partially_opaque(sensitive_attr: usize, flag: bool, l1: &dyn Fn(usize) ->
     lambda(sensitive_attr)
 }
 
+#[doc = "pure"]
 pub fn resolved_partially_opaque(sensitive_attr: usize, flag: bool) -> usize {
     let lambda = |x: usize| -> usize {
         return x * x;

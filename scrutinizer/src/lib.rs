@@ -100,6 +100,7 @@ fn scrutinizer<'tcx>(
     tcx.hir()
         .items()
         .filter_map(|item_id| analyze_item(item_id, tcx.to_owned(), args))
+        .filter(|result| result.is_inconsistent())
         .collect()
 }
 

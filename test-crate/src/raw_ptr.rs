@@ -1,4 +1,5 @@
 // Raw mut pointer dereference.
+#[doc = "pure"]
 pub unsafe fn raw_mut_ptr_deref() {
     let mut x = 42;
     let raw = &mut x as *mut i32;
@@ -6,6 +7,7 @@ pub unsafe fn raw_mut_ptr_deref() {
 }
 
 // Raw mut pointer aliasing.
+#[doc = "pure"]
 pub unsafe fn raw_mut_ptr_mut_ref() {
     let mut x = 42;
     let raw = &mut x as *mut i32;
@@ -24,12 +26,14 @@ impl Foo {
 }
 
 // Raw mut pointer dereference into call.
+#[doc = "pure"]
 pub unsafe fn raw_mut_ptr_deref_into_call() {
     let mut x = Foo { x: 0 };
     let raw = &mut x as *mut Foo;
     (*raw).amend();
 }
 
+#[doc = "pure"]
 pub unsafe fn raw_mut_ptr_deref_outer() {
     raw_mut_ptr_deref();
     raw_mut_ptr_mut_ref();
@@ -37,6 +41,7 @@ pub unsafe fn raw_mut_ptr_deref_outer() {
 }
 
 // Safe raw mut pointer dereference examples.
+#[doc = "pure"]
 pub unsafe fn safe_raw_mut_ptr_deref<'a>() -> &'a i32 {
     let mut x = 42;
     let raw = &mut x as *mut i32;
@@ -44,17 +49,20 @@ pub unsafe fn safe_raw_mut_ptr_deref<'a>() -> &'a i32 {
     &*raw
 }
 
+#[doc = "pure"]
 pub unsafe fn safe_raw_mut_ptr_deref_outer() {
     safe_raw_mut_ptr_deref();
 }
 
 // Raw const pointer dereference.
+#[doc = "pure"]
 pub unsafe fn raw_const_ptr_deref() {
     let x = 42;
     let raw = &x as *const i32;
     let _points_at = *raw;
 }
 
+#[doc = "pure"]
 pub unsafe fn raw_const_ptr_deref_outer() {
     raw_const_ptr_deref();
 }

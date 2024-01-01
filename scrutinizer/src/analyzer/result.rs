@@ -61,4 +61,8 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
             unhandled,
         }
     }
+
+    pub fn is_inconsistent(&self) -> bool {
+        self.annotated_pure != self.status
+    }
 }
