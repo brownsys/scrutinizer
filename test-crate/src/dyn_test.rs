@@ -18,11 +18,13 @@ impl Dynamic for Bar {
     }
 }
 
+#[doc = "pure"]
 fn eraser_outer(a: usize) -> usize {
     let dynamic: &dyn Dynamic = if a == 0 { &Foo {} } else { &Bar {} };
     eraser_inner(a, dynamic)
 }
 
+#[doc = "impure"]
 fn eraser_inner(a: usize, dynamic: &dyn Dynamic) -> usize {
     dynamic.inc(a)
 }

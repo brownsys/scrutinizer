@@ -6,9 +6,11 @@ use super::arg_ty::ArgTy;
 use super::fn_data::FnData;
 use super::important_locals::ImportantLocals;
 use super::instance_ext::InstanceExt;
+use super::substs_ext::SubstsExt;
 
 use itertools::Itertools;
 
+#[derive(Debug)]
 pub struct PartialFnData<'tcx> {
     def_id: DefId,
     substs: ty::SubstsRef<'tcx>,
@@ -41,7 +43,7 @@ impl<'tcx> PartialFnData<'tcx> {
         &self,
         old_important_locals: &ImportantLocals,
         tcx: TyCtxt<'tcx>,
-    ) -> Option<Vec<FnData<'tcx>>> {
+    ) -> Vec<FnData<'tcx>> {
         // Resolve function instances that need to be analyzed.
         let maybe_instance =
             ty::Instance::resolve(tcx, ty::ParamEnv::reveal_all(), self.def_id, self.substs)
@@ -57,6 +59,7 @@ impl<'tcx> PartialFnData<'tcx> {
                 self.arg_tys.clone(),
                 maybe_instance.unwrap(),
                 important_locals,
+                tcx,
             )]
         } else {
             // Extract all plausible instances if body is unavailable.
@@ -64,25 +67,19 @@ impl<'tcx> PartialFnData<'tcx> {
             if !plausible_instances.is_empty() {
                 plausible_instances
                     .into_iter()
-                    .filter_map(|instance| {
+                    .map(|instance| {
                         let arg_tys = instance.arg_tys(tcx);
                         let important_locals =
                             old_important_locals.transition(&self.args, instance.def_id(), tcx);
-                        Some(FnData::new(arg_tys, instance, important_locals))
+                        FnData::new(arg_tys, instance, important_locals, tcx)
                     })
                     .collect()
             } else {
                 // We are unable to verify the purity due to external reference or dynamic dispatch.
-                return None;
+                return vec![];
             }
         };
-
-        Some(
-            fns.into_iter()
-                // Filter out all const functions.
-                .filter(|func| !tcx.is_const_fn_raw(func.get_instance().def_id()))
-                .collect(),
-        )
+        fns
     }
 
     fn find_plausible_instances(
@@ -149,23 +146,13 @@ impl<'tcx> PartialFnData<'tcx> {
         tcx: TyCtxt<'tcx>,
     ) -> Option<ty::Instance<'tcx>> {
         // Check if every substitution is a type.
-        let is_ty = substs.iter().all(|subst| match subst.unpack() {
-            ty::GenericArgKind::Type(_) => true,
-            _ => false,
-        });
-        // Check that every substitution contains no params itself.
-        let contains_params = substs.iter().all(|subst| {
-            subst.walk().any(|ty| match ty.unpack() {
-                ty::GenericArgKind::Type(ty) => match ty.kind() {
-                    ty::Param(_) => true,
-                    _ => false,
-                },
-                _ => false,
-            })
-        });
-        if is_ty && !contains_params {
+        let new_substs: ty::SubstsRef = tcx.mk_substs(substs.as_slice());
+        let param_env = ty::ParamEnv::reveal_all();
+
+        if new_substs.maybe_invalid_for(def_id, param_env, tcx) {
+            None
+        } else {
             // Try substituting.
-            let new_substs = tcx.mk_substs(substs.as_slice());
             let new_instance =
                 tcx.resolve_instance(ty::ParamEnv::reveal_all().and((def_id, new_substs)));
             new_instance.unwrap().and_then(|instance| {
@@ -175,8 +162,6 @@ impl<'tcx> PartialFnData<'tcx> {
                     None
                 }
             })
-        } else {
-            None
         }
     }
 

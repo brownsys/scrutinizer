@@ -22,8 +22,11 @@ impl<'tcx> ArgTy<'tcx> {
         let outer_body = tcx.optimized_mir(current_fn.get_instance().def_id());
         let arg_ty = arg.ty(outer_body, tcx);
         // Check whether argument type was erased.
-        if arg_ty.contains_trait() {
-            let backward_deps = current_fn.deps_for(arg, location, tcx);
+        if arg_ty.contains_erased() {
+            let backward_deps = arg
+                .place()
+                .and_then(|place| Some(current_fn.backward_deps_for(place, location, tcx)))
+                .unwrap_or(vec![]);
             ArgTy::Erased(arg_ty, backward_deps)
         } else {
             ArgTy::Simple(arg_ty)
@@ -38,7 +41,7 @@ impl<'tcx> ArgTy<'tcx> {
         // TODO: Can it ever happen if we reject functions with generic arguments?
         match self {
             ArgTy::Simple(_) => false,
-            ArgTy::Erased(_, influences) => influences.iter().any(|ty| ty.contains_trait()),
+            ArgTy::Erased(_, influences) => influences.iter().any(|ty| ty.contains_erased()),
         }
     }
     pub fn into_vec(self) -> Vec<Ty<'tcx>> {

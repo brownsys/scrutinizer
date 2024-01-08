@@ -82,36 +82,38 @@ impl<'tcx> FnVisitor<'tcx> {
             self.tcx,
         );
 
-        match partial_fn_data.try_resolve(&self.current_fn.important_locals(), self.tcx) {
-            Some(fns) => {
-                for func in fns.into_iter() {
-                    let def_id = func.get_instance().def_id();
-                    // Only if we have not seen this call before.
-                    if self.storage.borrow().encountered_def_id(def_id) {
-                        continue;
-                    }
-                    let body = self.tcx.optimized_mir(def_id);
-
-                    self.storage.borrow_mut().add_call(FnCallInfo::WithBody {
-                        def_id,
-                        arg_tys: func.get_arg_tys().clone(),
-                        call_span,
-                        body_span: body.span,
-                        raw_ptr_deref: body.has_raw_ptr_deref(self.tcx),
-                    });
-
-                    // Swap the current instance and continue recursively.
-                    let mut visitor = self.clone_with(func);
-                    visitor.visit_body(body);
+        let plausible_fns =
+            partial_fn_data.try_resolve(&self.current_fn.important_locals(), self.tcx);
+        if !plausible_fns.is_empty() {
+            for func in plausible_fns
+                .into_iter()
+                .filter(|func| !self.tcx.is_const_fn_raw(func.get_instance().def_id()))
+            {
+                let def_id = func.get_instance().def_id();
+                // Only if we have not seen this call before.
+                if self.storage.borrow().encountered_def_id(def_id) {
+                    continue;
                 }
-            }
-            None => {
-                self.storage.borrow_mut().add_call(FnCallInfo::WithoutBody {
+                let body = self.tcx.optimized_mir(def_id);
+
+                self.storage.borrow_mut().add_call(FnCallInfo::WithBody {
                     def_id,
-                    arg_tys: partial_fn_data.get_arg_tys(),
+                    arg_tys: func.get_arg_tys().clone(),
                     call_span,
+                    body_span: body.span,
+                    raw_ptr_deref: body.has_raw_ptr_deref(self.tcx),
+                    return_ty: func.get_return_ty().clone(),
                 });
+                // Swap the current instance and continue recursively.
+                let mut visitor = self.clone_with(func);
+                visitor.visit_body(body);
             }
+        } else {
+            self.storage.borrow_mut().add_call(FnCallInfo::WithoutBody {
+                def_id,
+                arg_tys: partial_fn_data.get_arg_tys(),
+                call_span,
+            });
         }
     }
 

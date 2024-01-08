@@ -11,6 +11,7 @@ use flowistry::indexed::impls::LocationOrArg;
 use flowistry::infoflow::Direction;
 
 // Newtype for a vec of locals.
+#[derive(Debug)]
 pub struct ImportantLocals(Vec<Local>);
 
 impl Deref for ImportantLocals {

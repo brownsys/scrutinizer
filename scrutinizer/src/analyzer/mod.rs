@@ -5,8 +5,11 @@ mod important_locals;
 mod instance_ext;
 mod partial_fn_data;
 mod raw_ptr;
+mod ret_collector;
+mod local_ty_collector;
 mod result;
 mod storage;
+mod substs_ext;
 mod traversal;
 mod ty_ext;
 

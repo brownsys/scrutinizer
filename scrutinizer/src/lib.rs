@@ -12,9 +12,11 @@ extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_index;
+extern crate rustc_infer;
 extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_span;
+extern crate rustc_trait_selection;
 
 use std::{borrow::Cow, env, fs::File, io::Write};
 
@@ -100,7 +102,7 @@ fn scrutinizer<'tcx>(
     tcx.hir()
         .items()
         .filter_map(|item_id| analyze_item(item_id, tcx.to_owned(), args))
-        .filter(|result| result.is_inconsistent())
+        // .filter(|result| result.is_inconsistent())
         .collect()
 }
 
@@ -206,7 +208,7 @@ fn analyze_item<'tcx>(
             let mut visitor = FnVisitor::new(
                 def_id,
                 tcx,
-                FnData::new(arg_tys, instance, important_locals),
+                FnData::new(arg_tys, instance, important_locals, tcx),
             );
 
             // Begin the traversal.

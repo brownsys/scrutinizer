@@ -15,6 +15,7 @@ pub enum FnCallInfo<'tcx> {
         body_span: Span,
         // Whether body contains raw pointer dereference.
         raw_ptr_deref: bool,
+        return_ty: ArgTy<'tcx>,
     },
     WithoutBody {
         def_id: DefId,
@@ -35,6 +36,7 @@ impl<'tcx> Serialize for FnCallInfo<'tcx> {
                 ref call_span,
                 ref body_span,
                 ref raw_ptr_deref,
+                ref return_ty,
             } => {
                 let mut tv = serializer.serialize_struct_variant("FnCallInfo", 0, "WithBody", 5)?;
                 tv.serialize_field("def_id", format!("{:?}", def_id).as_str())?;
@@ -42,6 +44,7 @@ impl<'tcx> Serialize for FnCallInfo<'tcx> {
                 tv.serialize_field("call_span", format!("{:?}", call_span).as_str())?;
                 tv.serialize_field("body_span", format!("{:?}", body_span).as_str())?;
                 tv.serialize_field("raw_ptr_deref", &raw_ptr_deref)?;
+                tv.serialize_field("return_ty", &return_ty)?;
                 tv.end()
             }
             FnCallInfo::WithoutBody {
