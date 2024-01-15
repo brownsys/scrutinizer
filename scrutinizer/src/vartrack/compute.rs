@@ -41,17 +41,25 @@ pub fn compute_dependent_locals<'tcx>(
     let location_table = LocationTableShim::new(&body);
 
     // Find the directory with precomputed borrow checker facts for a given DefId.
-    // TODO: this mechanism is quite brittle, need a more robust approach.
     let facts_dir = {
-        let nll_filename = tcx.def_path(def_id).to_filename_friendly_no_crate();
+        let def_path = tcx.def_path(def_id);
+        let nll_filename = def_path.to_filename_friendly_no_crate();
         if def_id.krate == LOCAL_CRATE {
             format!("./nll-facts/{}", nll_filename)
         } else {
-            let diagnostic_string = tcx.sess().source_map().span_to_diagnostic_string(body.span);
+            let core_def_id = {
+                let mut core_candidate = def_id;
+                while tcx.opt_parent(core_candidate).is_some() {
+                    core_candidate = tcx.opt_parent(core_candidate).unwrap();
+                }
+                core_candidate
+            };
+            let diagnostic_string = tcx.sess().source_map().span_to_diagnostic_string(tcx.def_span(core_def_id));
             let split_path = diagnostic_string.rsplit_once("/src").unwrap();
             format!("{}/nll-facts/{}", split_path.0, nll_filename)
         }
     };
+
 
     // Run polonius on the borrow checker facts.
     let (input_facts, output_facts) = {
