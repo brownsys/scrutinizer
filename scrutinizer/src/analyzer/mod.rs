@@ -13,7 +13,7 @@ mod substs_ext;
 mod traversal;
 mod ty_ext;
 
-pub use arg_ty::ArgTy;
+pub use arg_ty::RefinedTy;
 pub use fn_data::FnData;
 pub use important_locals::ImportantLocals;
 pub use result::PurityAnalysisResult;

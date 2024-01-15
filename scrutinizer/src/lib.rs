@@ -3,8 +3,8 @@
 mod analyzer;
 mod vartrack;
 
-use analyzer::{ArgTy, ImportantLocals};
 use analyzer::{FnData, FnVisitor, PurityAnalysisResult};
+use analyzer::{ImportantLocals, RefinedTy};
 use vartrack::compute_dependent_locals;
 
 extern crate rustc_borrowck;
@@ -102,7 +102,7 @@ fn scrutinizer<'tcx>(
     tcx.hir()
         .items()
         .filter_map(|item_id| analyze_item(item_id, tcx.to_owned(), args))
-        // .filter(|result| result.is_inconsistent())
+        .filter(|result| result.is_inconsistent())
         .collect()
 }
 
@@ -194,10 +194,10 @@ fn analyze_item<'tcx>(
             let body = tcx.optimized_mir(def_id);
 
             // Create initial argument types.
-            let arg_tys: Vec<ArgTy> = (1..=body.arg_count)
+            let arg_tys: Vec<RefinedTy> = (1..=body.arg_count)
                 .map(|local| {
                     let arg_ty = body.local_decls[local.into()].ty;
-                    ArgTy::Simple(arg_ty)
+                    RefinedTy::Simple(arg_ty)
                 })
                 .collect();
 

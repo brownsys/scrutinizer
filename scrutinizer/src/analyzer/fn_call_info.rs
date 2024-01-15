@@ -1,26 +1,26 @@
 use serde::ser::{Serialize, SerializeStructVariant};
 
-use rustc_hir::def_id::DefId;
+use std::collections::HashMap;
 
+use rustc_hir::def_id::DefId;
+use rustc_middle::mir::Local;
 use rustc_span::Span;
 
-use super::arg_ty::ArgTy;
+use super::arg_ty::RefinedTy;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FnCallInfo<'tcx> {
     WithBody {
         def_id: DefId,
-        arg_tys: Vec<ArgTy<'tcx>>,
-        call_span: Span,
-        body_span: Span,
-        // Whether body contains raw pointer dereference.
+        from: DefId,
+        span: Span,
+        refined_tys: HashMap<Local, RefinedTy<'tcx>>,
         raw_ptr_deref: bool,
-        return_ty: ArgTy<'tcx>,
     },
     WithoutBody {
         def_id: DefId,
-        arg_tys: Vec<ArgTy<'tcx>>,
-        call_span: Span,
+        from: DefId,
+        arg_tys: Vec<RefinedTy<'tcx>>,
     },
 }
 
@@ -32,31 +32,31 @@ impl<'tcx> Serialize for FnCallInfo<'tcx> {
         match *self {
             FnCallInfo::WithBody {
                 ref def_id,
-                ref arg_tys,
-                ref call_span,
-                ref body_span,
+                ref from,
+                ref span,
+                ref refined_tys,
                 ref raw_ptr_deref,
-                ref return_ty,
             } => {
+                let refined_tys: HashMap<usize, &RefinedTy> =
+                    HashMap::from_iter(refined_tys.iter().map(|(k, v)| (k.as_usize(), v)));
                 let mut tv = serializer.serialize_struct_variant("FnCallInfo", 0, "WithBody", 5)?;
+                tv.serialize_field("from", format!("{:?}", from).as_str())?;
                 tv.serialize_field("def_id", format!("{:?}", def_id).as_str())?;
-                tv.serialize_field("arg_tys", &arg_tys)?;
-                tv.serialize_field("call_span", format!("{:?}", call_span).as_str())?;
-                tv.serialize_field("body_span", format!("{:?}", body_span).as_str())?;
+                tv.serialize_field("refined_tys", &refined_tys)?;
+                tv.serialize_field("span", format!("{:?}", span).as_str())?;
                 tv.serialize_field("raw_ptr_deref", &raw_ptr_deref)?;
-                tv.serialize_field("return_ty", &return_ty)?;
                 tv.end()
             }
             FnCallInfo::WithoutBody {
                 ref def_id,
+                ref from,
                 ref arg_tys,
-                ref call_span,
             } => {
                 let mut tv =
                     serializer.serialize_struct_variant("FnCallInfo", 1, "WithoutBody", 3)?;
+                tv.serialize_field("from", format!("{:?}", from).as_str())?;
                 tv.serialize_field("def_id", format!("{:?}", def_id).as_str())?;
                 tv.serialize_field("arg_tys", &arg_tys)?;
-                tv.serialize_field("call_span", format!("{:?}", call_span).as_str())?;
                 tv.end()
             }
         }

@@ -9,7 +9,7 @@ use flowistry::infoflow::Direction;
 
 use crate::vartrack::compute_dependent_locals;
 
-use super::arg_ty::ArgTy;
+use super::arg_ty::RefinedTy;
 use super::important_locals::ImportantLocals;
 use super::local_ty_collector::GetLocalTys;
 use super::ret_collector::GetReturnSites;
@@ -19,27 +19,31 @@ use itertools::Itertools;
 
 #[derive(Debug)]
 pub struct FnData<'tcx> {
-    arg_tys: Vec<ArgTy<'tcx>>,
     instance: ty::Instance<'tcx>,
     important_locals: ImportantLocals,
-    return_ty: Option<ArgTy<'tcx>>,
-    refined_types: HashMap<Local, ArgTy<'tcx>>,
+    refined_types: HashMap<Local, RefinedTy<'tcx>>,
 }
 
 impl<'tcx> FnData<'tcx> {
     pub fn new(
-        arg_tys: Vec<ArgTy<'tcx>>,
+        arg_tys: Vec<RefinedTy<'tcx>>,
         instance: ty::Instance<'tcx>,
         important_locals: ImportantLocals,
         tcx: TyCtxt<'tcx>,
     ) -> Self {
         let mut fn_data = Self {
-            arg_tys,
             instance,
             important_locals,
-            return_ty: None,
             refined_types: HashMap::new(),
         };
+
+        // Add argument types to the refined types map.
+        arg_tys.into_iter().enumerate().for_each(|(i, refined_ty)| {
+            fn_data
+                .refined_types
+                .insert(Local::from_usize(i + 1), refined_ty);
+        });
+
         let body = tcx.optimized_mir(fn_data.get_instance().def_id());
         let return_ty = body.return_ty();
         // Check whether argument type was erased.
@@ -52,21 +56,25 @@ impl<'tcx> FnData<'tcx> {
                 .map(|location| fn_data.backward_deps_for(ret_place, &location, tcx))
                 .flatten()
                 .collect();
-            ArgTy::Erased(return_ty, backward_types)
+            RefinedTy::Erased(return_ty, backward_types)
         } else {
-            ArgTy::Simple(return_ty)
+            RefinedTy::Simple(return_ty)
         };
-        fn_data.return_ty = Some(return_ty);
+
+        fn_data
+            .refined_types
+            .insert(Local::from_usize(0), return_ty);
+
         fn_data
     }
     pub fn important_locals(&self) -> &ImportantLocals {
         &self.important_locals
     }
-    pub fn get_arg_tys(&self) -> &Vec<ArgTy<'tcx>> {
-        &self.arg_tys
-    }
-    pub fn get_return_ty(&self) -> &ArgTy<'tcx> {
-        self.return_ty.as_ref().unwrap()
+    pub fn return_ty(&self) -> RefinedTy<'tcx> {
+        self.refined_types
+            .get(&Local::from_usize(0))
+            .unwrap()
+            .clone()
     }
     pub fn get_instance(&self) -> &ty::Instance<'tcx> {
         &self.instance
@@ -94,21 +102,10 @@ impl<'tcx> FnData<'tcx> {
     }
     // Merge subtypes for a local if it is an argument, skip intermediate erased types.
     fn subtypes_for(&self, local: Local, tcx: TyCtxt<'tcx>) -> Vec<Ty<'tcx>> {
-        let arg_influences = if local.index() != 0 && local.index() <= self.arg_tys.len() {
-            match self.arg_tys[local.index() - 1] {
-                ArgTy::Simple(ty) => vec![ty],
-                ArgTy::Erased(ty, ref influences) => {
-                    if influences.is_empty() {
-                        vec![ty]
-                    } else {
-                        influences.to_owned()
-                    }
-                }
-            }
-        } else if self.refined_types.contains_key(&local) {
+        let refined_influences = if self.refined_types.contains_key(&local) {
             match self.refined_types[&local] {
-                ArgTy::Simple(ty) => vec![ty],
-                ArgTy::Erased(ty, ref influences) => {
+                RefinedTy::Simple(ty) => vec![ty],
+                RefinedTy::Erased(ty, ref influences) => {
                     if influences.is_empty() {
                         vec![ty]
                     } else {
@@ -132,12 +129,15 @@ impl<'tcx> FnData<'tcx> {
             .filter(|ty| !ty.contains_erased())
             .collect();
 
-        arg_influences
+        refined_influences
             .into_iter()
             .chain(non_erased_local_tys)
             .collect()
     }
-    pub fn refine_ty(&mut self, local: Local, ty: ArgTy<'tcx>) {
+    pub fn refine_ty(&mut self, local: Local, ty: RefinedTy<'tcx>) {
         self.refined_types.insert(local, ty);
+    }
+    pub fn get_refined_tys(&self) -> HashMap<Local, RefinedTy<'tcx>> {
+        self.refined_types.clone()
     }
 }

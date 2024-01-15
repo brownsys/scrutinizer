@@ -2,7 +2,7 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{Location, Operand};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 
-use super::arg_ty::ArgTy;
+use super::arg_ty::RefinedTy;
 use super::fn_data::FnData;
 use super::important_locals::ImportantLocals;
 use super::instance_ext::InstanceExt;
@@ -15,7 +15,7 @@ pub struct PartialFnData<'tcx> {
     def_id: DefId,
     substs: ty::SubstsRef<'tcx>,
     args: Vec<Operand<'tcx>>,
-    arg_tys: Vec<ArgTy<'tcx>>,
+    arg_tys: Vec<RefinedTy<'tcx>>,
 }
 
 impl<'tcx> PartialFnData<'tcx> {
@@ -29,7 +29,7 @@ impl<'tcx> PartialFnData<'tcx> {
     ) -> Self {
         let arg_tys = args
             .iter()
-            .map(|arg| ArgTy::from_known_or_erased(arg, location, outer_fn, tcx))
+            .map(|arg| RefinedTy::from_known_or_erased(arg, location, outer_fn, tcx))
             .collect();
         Self {
             def_id,
@@ -165,7 +165,7 @@ impl<'tcx> PartialFnData<'tcx> {
         }
     }
 
-    pub fn get_arg_tys(&self) -> Vec<ArgTy<'tcx>> {
+    pub fn get_arg_tys(&self) -> Vec<RefinedTy<'tcx>> {
         self.arg_tys.clone()
     }
 }
