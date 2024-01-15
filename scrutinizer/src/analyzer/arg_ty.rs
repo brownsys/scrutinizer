@@ -6,7 +6,7 @@ use rustc_middle::ty::{Ty, TyCtxt};
 use super::fn_data::FnData;
 use super::ty_ext::TyExt;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArgTy<'tcx> {
     Simple(Ty<'tcx>),
     Erased(Ty<'tcx>, Vec<Ty<'tcx>>),

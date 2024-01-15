@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use rustc_hir::def_id::DefId;
-use rustc_middle::mir::{visit::Visitor, Location, Operand, Terminator, TerminatorKind};
+use rustc_middle::mir::{visit::Visitor, Location, Operand, Place, Terminator, TerminatorKind};
 use rustc_middle::ty::{self, TyCtxt};
 
 use super::fn_call_info::FnCallInfo;
@@ -26,6 +26,7 @@ impl<'tcx> Visitor<'tcx> for FnVisitor<'tcx> {
             func,
             args,
             fn_span,
+            destination,
             ..
         } = &terminator.kind
         {
@@ -52,6 +53,7 @@ impl<'tcx> Visitor<'tcx> for FnVisitor<'tcx> {
                     args,
                     location,
                     fn_span.to_owned(),
+                    destination,
                 );
             } else {
                 self.storage
@@ -71,6 +73,7 @@ impl<'tcx> FnVisitor<'tcx> {
         args: &Vec<Operand<'tcx>>,
         location: Location,
         call_span: rustc_span::Span,
+        ret_destination: &Place,
     ) {
         // Calculate argument types, account for possible erasure.
         let partial_fn_data = PartialFnData::new(
@@ -91,19 +94,28 @@ impl<'tcx> FnVisitor<'tcx> {
             {
                 let def_id = func.get_instance().def_id();
                 // Only if we have not seen this call before.
-                if self.storage.borrow().encountered_def_id(def_id) {
-                    continue;
-                }
                 let body = self.tcx.optimized_mir(def_id);
 
-                self.storage.borrow_mut().add_call(FnCallInfo::WithBody {
+                let fn_call_info = FnCallInfo::WithBody {
                     def_id,
                     arg_tys: func.get_arg_tys().clone(),
                     call_span,
                     body_span: body.span,
                     raw_ptr_deref: body.has_raw_ptr_deref(self.tcx),
                     return_ty: func.get_return_ty().clone(),
-                });
+                };
+
+                self.current_fn.refine_ty(
+                    ret_destination.as_local().unwrap(),
+                    func.get_return_ty().clone(),
+                );
+
+                if self.storage.borrow().encountered_fn_call(&fn_call_info) {
+                    continue;
+                }
+
+                self.storage.borrow_mut().add_call(fn_call_info);
+
                 // Swap the current instance and continue recursively.
                 let mut visitor = self.clone_with(func);
                 visitor.visit_body(body);

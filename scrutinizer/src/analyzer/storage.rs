@@ -30,15 +30,8 @@ impl<'tcx> FnCallStorage<'tcx> {
         self.unhandled.push(new_unhandled);
     }
 
-    // TODO: this is no longer valid, think about handling recursive call chains.
-    pub fn encountered_def_id(&self, def_id: DefId) -> bool {
-        self.fn_calls.iter().any(|fn_call_info| {
-            let fn_call_info_def_id = match fn_call_info {
-                FnCallInfo::WithBody { def_id, .. } => def_id,
-                FnCallInfo::WithoutBody { def_id, .. } => def_id,
-            };
-            *fn_call_info_def_id == def_id
-        })
+    pub fn encountered_fn_call(&self, fn_call: &FnCallInfo<'tcx>) -> bool {
+        self.fn_calls.contains(fn_call)
     }
 
     fn check_fn_call_purity(&self, fn_call: &FnCallInfo) -> bool {

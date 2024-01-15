@@ -6,7 +6,7 @@ use rustc_span::Span;
 
 use super::arg_ty::ArgTy;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FnCallInfo<'tcx> {
     WithBody {
         def_id: DefId,

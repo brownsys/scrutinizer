@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use rustc_middle::mir::{Local, Location, Place};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_utils::PlaceExt;
@@ -21,6 +23,7 @@ pub struct FnData<'tcx> {
     instance: ty::Instance<'tcx>,
     important_locals: ImportantLocals,
     return_ty: Option<ArgTy<'tcx>>,
+    refined_types: HashMap<Local, ArgTy<'tcx>>,
 }
 
 impl<'tcx> FnData<'tcx> {
@@ -35,6 +38,7 @@ impl<'tcx> FnData<'tcx> {
             instance,
             important_locals,
             return_ty: None,
+            refined_types: HashMap::new(),
         };
         let body = tcx.optimized_mir(fn_data.get_instance().def_id());
         let return_ty = body.return_ty();
@@ -88,11 +92,21 @@ impl<'tcx> FnData<'tcx> {
             .collect();
         deps_subtypes
     }
-
     // Merge subtypes for a local if it is an argument, skip intermediate erased types.
     fn subtypes_for(&self, local: Local, tcx: TyCtxt<'tcx>) -> Vec<Ty<'tcx>> {
         let arg_influences = if local.index() != 0 && local.index() <= self.arg_tys.len() {
             match self.arg_tys[local.index() - 1] {
+                ArgTy::Simple(ty) => vec![ty],
+                ArgTy::Erased(ty, ref influences) => {
+                    if influences.is_empty() {
+                        vec![ty]
+                    } else {
+                        influences.to_owned()
+                    }
+                }
+            }
+        } else if self.refined_types.contains_key(&local) {
+            match self.refined_types[&local] {
                 ArgTy::Simple(ty) => vec![ty],
                 ArgTy::Erased(ty, ref influences) => {
                     if influences.is_empty() {
@@ -122,5 +136,8 @@ impl<'tcx> FnData<'tcx> {
             .into_iter()
             .chain(non_erased_local_tys)
             .collect()
+    }
+    pub fn refine_ty(&mut self, local: Local, ty: ArgTy<'tcx>) {
+        self.refined_types.insert(local, ty);
     }
 }
