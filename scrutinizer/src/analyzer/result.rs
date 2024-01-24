@@ -1,9 +1,9 @@
-use super::fn_call_info::FnCallInfo;
-
-use serde::ser::{Serialize, SerializeStruct};
-
+use itertools::Itertools;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::Terminator;
+use serde::ser::{Serialize, SerializeStruct};
+
+use super::fn_call_info::FnCallInfo;
 
 pub struct PurityAnalysisResult<'tcx> {
     def_id: DefId,
@@ -35,7 +35,7 @@ impl<'tcx> Serialize for PurityAnalysisResult<'tcx> {
                 .unhandled
                 .iter()
                 .map(|terminator| format!("{:?}", terminator))
-                .collect::<Vec<_>>(),
+                .collect_vec(),
         )?;
         state.end()
     }

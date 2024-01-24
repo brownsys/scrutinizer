@@ -39,7 +39,7 @@ fn eraser_ret_outer(a: usize) -> usize {
     eraser_ret_executor(a, &cl)
 }
 
-#[doc = "pure"]
+#[doc = "impure"]
 fn eraser_ret_executor(a: usize, cl: &dyn Fn(usize) -> usize) -> usize {
     cl(a)
 }
@@ -58,12 +58,12 @@ fn eraser_upvar_outer(a: usize) -> usize {
     eraser_upvar_executor(a, &cl)
 }
 
-#[doc = "pure"]
+#[doc = "impure"]
 fn eraser_upvar_executor(a: usize, cl: &dyn Fn(usize) -> usize) -> usize {
     cl(a)
 }
 
-#[doc = "pure"]
+#[doc = "impure"]
 fn eraser_upvar_hof(a: usize, cl: &dyn Fn(usize) -> usize) -> impl Fn(usize) -> usize + '_ {
     move |x| cl(x + a)
 }

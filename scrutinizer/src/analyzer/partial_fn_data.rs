@@ -1,12 +1,13 @@
+use log::trace;
 use rustc_hir::def_id::DefId;
-use rustc_middle::mir::{Location, Operand};
+use rustc_middle::mir::{Body, Operand};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 
-use super::arg_ty::RefinedTy;
 use super::fn_data::FnData;
 use super::important_locals::ImportantLocals;
 use super::instance_ext::InstanceExt;
-use super::substs_ext::SubstsExt;
+use super::tracked_ty::TrackedTy;
+use super::type_tracker::TrackedTypeMap;
 
 use itertools::Itertools;
 
@@ -15,28 +16,47 @@ pub struct PartialFnData<'tcx> {
     def_id: DefId,
     substs: ty::SubstsRef<'tcx>,
     args: Vec<Operand<'tcx>>,
-    arg_tys: Vec<RefinedTy<'tcx>>,
+    arg_tys: Vec<TrackedTy<'tcx>>,
 }
 
 impl<'tcx> PartialFnData<'tcx> {
     pub fn new(
-        def_id: DefId,
+        def_id: &DefId,
         substs: ty::SubstsRef<'tcx>,
-        args: Vec<Operand<'tcx>>,
-        location: &Location,
-        outer_fn: &FnData<'tcx>,
+        args: &Vec<Operand<'tcx>>,
+        tracked_ty_map: &TrackedTypeMap<'tcx>,
+        outer_body: &Body<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> Self {
         let arg_tys = args
             .iter()
-            .map(|arg| RefinedTy::from_known_or_erased(arg, location, outer_fn, tcx))
+            .map(|arg| {
+                arg.place()
+                    .and_then(|place| tracked_ty_map.map.get(&place))
+                    .and_then(|ty| Some(ty.to_owned()))
+                    .unwrap_or(TrackedTy::determine(arg.ty(outer_body, tcx)))
+            })
             .collect();
         Self {
-            def_id,
+            def_id: def_id.to_owned(),
+            args: args.to_owned(),
             substs,
             arg_tys,
-            args,
         }
+    }
+    fn merge_args(
+        &self,
+        inferred_args: Vec<TrackedTy<'tcx>>,
+        provided_args: Vec<TrackedTy<'tcx>>,
+    ) -> Vec<TrackedTy<'tcx>> {
+        inferred_args
+            .into_iter()
+            .zip(provided_args.into_iter())
+            .map(|(inferred, provided)| match provided {
+                TrackedTy::Simple(..) => provided,
+                TrackedTy::Erased(..) => inferred,
+            })
+            .collect_vec()
     }
     // Try resolving partial function data to full function data.
     pub fn try_resolve(
@@ -53,13 +73,19 @@ impl<'tcx> PartialFnData<'tcx> {
             None => self.def_id,
         };
         let fns = if tcx.is_mir_available(def_id) {
+            let inferred_args = if tcx.is_closure(def_id) {
+                self.arg_tys[1].spread()
+            } else {
+                self.arg_tys.clone()
+            };
+            let provided_args = maybe_instance.unwrap().arg_tys(tcx);
+            let arg_tys = self.merge_args(inferred_args, provided_args);
             // Successfuly resolve full function data if MIR is available.
             let important_locals = old_important_locals.transition(&self.args, def_id, tcx);
             vec![FnData::new(
-                self.arg_tys.clone(),
                 maybe_instance.unwrap(),
+                arg_tys,
                 important_locals,
-                tcx,
             )]
         } else {
             // Extract all plausible instances if body is unavailable.
@@ -68,10 +94,22 @@ impl<'tcx> PartialFnData<'tcx> {
                 plausible_instances
                     .into_iter()
                     .map(|instance| {
-                        let arg_tys = instance.arg_tys(tcx);
+                        let def_path_string = tcx.def_path_str(def_id);
+                        let closure_shims =
+                            vec!["FnMut::call_mut", "Fn::call", "FnOnce::call_once"];
+                        let inferred_args = if closure_shims
+                            .iter()
+                            .any(|closure_shim| def_path_string.contains(closure_shim))
+                        {
+                            self.arg_tys[1].spread()
+                        } else {
+                            self.arg_tys.clone()
+                        };
+                        let provided_args = instance.arg_tys(tcx);
+                        let arg_tys = self.merge_args(inferred_args, provided_args);
                         let important_locals =
                             old_important_locals.transition(&self.args, instance.def_id(), tcx);
-                        FnData::new(arg_tys, instance, important_locals, tcx)
+                        FnData::new(instance, arg_tys, important_locals)
                     })
                     .collect()
             } else {
@@ -88,7 +126,12 @@ impl<'tcx> PartialFnData<'tcx> {
         tcx: TyCtxt<'tcx>,
     ) -> Vec<ty::Instance<'tcx>> {
         // Short-circut on poisoned arguments.
-        if self.arg_tys.iter().any(|arg_ty| arg_ty.is_poisoned()) {
+        if self.arg_tys.iter().any(|arg_ty| arg_ty.poisoned()) {
+            trace!(
+                "encountered a poisoned argument at {:?} {:?}",
+                def_id,
+                self.arg_tys
+            );
             return vec![];
         }
         let generic_tys = tcx
@@ -119,7 +162,7 @@ impl<'tcx> PartialFnData<'tcx> {
             .map(|(generic_ty, concrete_ty)| {
                 // Retrieve all possible substitutions.
                 let subst_tys = concrete_ty.into_vec();
-                let valid_substs: Vec<ty::GenericArg<'tcx>> = subst_tys
+                let valid_substs = subst_tys
                     .into_iter()
                     .filter_map(|subst_ty| {
                         // Peel both types simultaneously until type parameter appears.
@@ -132,7 +175,7 @@ impl<'tcx> PartialFnData<'tcx> {
                             })
                             .and_then(|(_, subst_to)| Some(subst_to))
                     })
-                    .collect();
+                    .collect_vec();
                 valid_substs
             })
             .flatten()
@@ -147,25 +190,29 @@ impl<'tcx> PartialFnData<'tcx> {
     ) -> Option<ty::Instance<'tcx>> {
         // Check if every substitution is a type.
         let new_substs: ty::SubstsRef = tcx.mk_substs(substs.as_slice());
-        let param_env = ty::ParamEnv::reveal_all();
-
-        if new_substs.maybe_invalid_for(def_id, param_env, tcx) {
-            None
+        // Try substituting.
+        let def_path_string = tcx.def_path_str(def_id);
+        let closure_shims = vec!["FnMut::call_mut", "Fn::call", "FnOnce::call_once"];
+        let new_instance = if closure_shims
+            .iter()
+            .any(|closure_shim| def_path_string.contains(closure_shim))
+        {
+            // TODO: Come up with a way to create binders.
+            trace!("substituting closure shim {:?}, {:?}", def_id, new_substs);
+            ty::Instance::resolve(tcx, ty::ParamEnv::reveal_all(), def_id, new_substs).unwrap()
         } else {
-            // Try substituting.
-            let new_instance =
-                tcx.resolve_instance(ty::ParamEnv::reveal_all().and((def_id, new_substs)));
-            new_instance.unwrap().and_then(|instance| {
-                if tcx.is_mir_available(instance.def_id()) {
-                    Some(instance)
-                } else {
-                    None
-                }
-            })
-        }
+            ty::Instance::resolve(tcx, ty::ParamEnv::reveal_all(), def_id, new_substs).unwrap()
+        };
+        new_instance.and_then(|instance| {
+            if tcx.is_mir_available(instance.def_id()) {
+                Some(instance)
+            } else {
+                None
+            }
+        })
     }
 
-    pub fn get_arg_tys(&self) -> Vec<RefinedTy<'tcx>> {
+    pub fn get_arg_tys(&self) -> Vec<TrackedTy<'tcx>> {
         self.arg_tys.clone()
     }
 }

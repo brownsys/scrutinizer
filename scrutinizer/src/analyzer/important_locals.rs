@@ -1,14 +1,13 @@
-use std::ops::Deref;
-
 use crate::vartrack::compute_dependent_locals;
 
+use flowistry::indexed::impls::LocationOrArg;
+use flowistry::infoflow::Direction;
+use itertools::Itertools;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{Local, Operand, Place};
 use rustc_middle::ty::TyCtxt;
 use rustc_utils::PlaceExt;
-
-use flowistry::indexed::impls::LocationOrArg;
-use flowistry::infoflow::Direction;
+use std::ops::Deref;
 
 // Newtype for a vec of locals.
 #[derive(Debug)]
@@ -39,7 +38,7 @@ impl ImportantLocals {
         }
         // Construct targets of the arguments.
         let new_important_arg_targets = {
-            let important_args_to_callee: Vec<usize> = args_from_caller
+            let important_args_to_callee = args_from_caller
                 .iter()
                 .enumerate()
                 .filter_map(|(i, arg)| {
@@ -54,7 +53,7 @@ impl ImportantLocals {
                             }
                         })
                 })
-                .collect();
+                .collect_vec();
             vec![important_args_to_callee
                 .iter()
                 .map(|arg| {

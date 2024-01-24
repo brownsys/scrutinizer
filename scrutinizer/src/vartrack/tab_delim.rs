@@ -56,10 +56,7 @@ pub(super) fn load_tab_delimited_facts(
     }
 }
 
-fn load_tab_delimited_file<Row>(
-    tables: &mut InternerTables,
-    path: &Path,
-) -> io::Result<Vec<Row>>
+fn load_tab_delimited_file<Row>(tables: &mut InternerTables, path: &Path) -> io::Result<Vec<Row>>
 where
     Row: for<'input> FromTabDelimited<'input>,
 {

@@ -54,12 +54,14 @@ pub fn compute_dependent_locals<'tcx>(
                 }
                 core_candidate
             };
-            let diagnostic_string = tcx.sess().source_map().span_to_diagnostic_string(tcx.def_span(core_def_id));
+            let diagnostic_string = tcx
+                .sess()
+                .source_map()
+                .span_to_diagnostic_string(tcx.def_span(core_def_id));
             let split_path = diagnostic_string.rsplit_once("/src").unwrap();
             format!("{}/nll-facts/{}", split_path.0, nll_filename)
         }
     };
-
 
     // Run polonius on the borrow checker facts.
     let (input_facts, output_facts) = {

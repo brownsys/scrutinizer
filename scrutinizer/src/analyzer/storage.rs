@@ -1,10 +1,9 @@
-use super::fn_call_info::FnCallInfo;
-use super::result::PurityAnalysisResult;
-
 use regex::Regex;
-
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::Terminator;
+
+use super::fn_call_info::FnCallInfo;
+use super::result::PurityAnalysisResult;
 
 #[derive(Clone)]
 pub struct FnCallStorage<'tcx> {

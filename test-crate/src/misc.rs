@@ -50,3 +50,29 @@ pub fn ref_cell_mut(refcell: &RefCell<usize>) {
 pub fn date_format(v: NaiveDateTime) -> String {
     v.format("%Y-%m-%d %H:%M:%S").to_string()
 }
+
+trait Dynamic {
+    fn inc(&self, a: usize) -> usize;
+}
+
+struct Foo;
+
+struct Bar;
+
+impl Dynamic for Foo {
+    fn inc(&self, a: usize) -> usize {
+        a + 1
+    }
+}
+
+impl Dynamic for Bar {
+    fn inc(&self, a: usize) -> usize {
+        a + 2
+    }
+}
+
+#[doc = "pure"]
+pub fn simple(a: usize) -> usize {
+    let dynamic: &dyn Dynamic = if a == 0 { &Foo {} } else { &Bar {} };
+    dynamic.inc(a)
+}

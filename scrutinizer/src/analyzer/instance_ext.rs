@@ -1,12 +1,13 @@
-use super::arg_ty::RefinedTy;
 use rustc_middle::ty::{self, TyCtxt};
 
+use super::tracked_ty::TrackedTy;
+
 pub trait InstanceExt<'tcx> {
-    fn arg_tys(&self, tcx: TyCtxt<'tcx>) -> Vec<RefinedTy<'tcx>>;
+    fn arg_tys(&self, tcx: TyCtxt<'tcx>) -> Vec<TrackedTy<'tcx>>;
 }
 
 impl<'tcx> InstanceExt<'tcx> for ty::Instance<'tcx> {
-    fn arg_tys(&self, tcx: TyCtxt<'tcx>) -> Vec<RefinedTy<'tcx>> {
+    fn arg_tys(&self, tcx: TyCtxt<'tcx>) -> Vec<TrackedTy<'tcx>> {
         let ty = tcx.type_of(self.def_id()).subst(tcx, self.substs);
         let sig = match ty.kind() {
             ty::FnDef(_, _) => tcx
@@ -18,7 +19,7 @@ impl<'tcx> InstanceExt<'tcx> for ty::Instance<'tcx> {
         };
         sig.inputs()
             .iter()
-            .map(|ty| RefinedTy::from_known(ty.to_owned()))
+            .map(|ty| TrackedTy::determine(ty.to_owned()))
             .collect()
     }
 }

@@ -1,11 +1,8 @@
+#![feature(box_patterns)]
 #![feature(rustc_private)]
 
 mod analyzer;
 mod vartrack;
-
-use analyzer::{FnData, FnVisitor, PurityAnalysisResult};
-use analyzer::{ImportantLocals, RefinedTy};
-use vartrack::compute_dependent_locals;
 
 extern crate rustc_borrowck;
 extern crate rustc_data_structures;
@@ -15,21 +12,31 @@ extern crate rustc_index;
 extern crate rustc_infer;
 extern crate rustc_interface;
 extern crate rustc_middle;
+extern crate rustc_mir_dataflow;
 extern crate rustc_span;
 extern crate rustc_trait_selection;
 
-use std::{borrow::Cow, env, fs::File, io::Write};
-
+use analyzer::{
+    FnCallStorage, FnData, ImportantLocals, PurityAnalysisResult, TrackedTy, TypeTracker,
+};
 use clap::Parser;
 use flowistry::indexed::impls::LocationOrArg;
 use flowistry::infoflow::Direction;
-use serde::{Deserialize, Serialize};
-
-use rustc_hir::{GenericParamKind, ItemId, ItemKind, TyKind};
-use rustc_middle::mir::{visit::Visitor, Local, Mutability, Place};
+use itertools::Itertools;
+use log::trace;
+use rustc_hir::{ItemId, ItemKind};
+use rustc_middle::mir::{Local, Mutability, Place};
 use rustc_middle::ty;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
 use rustc_utils::PlaceExt;
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::env;
+use std::fs::File;
+use std::io::Write;
+use std::rc::Rc;
+use vartrack::compute_dependent_locals;
 
 pub struct ScrutinizerPlugin;
 
@@ -124,14 +131,24 @@ fn analyze_item<'tcx>(
     if args.function.as_str().is_empty()
         || item.ident.name == rustc_span::symbol::Symbol::intern(args.function.as_str())
     {
-        if let ItemKind::Fn(fn_sig, generics, _) = &item.kind {
+        if let ItemKind::Fn(fn_sig, ..) = &item.kind {
+            // Retrieve body.
+            let body = tcx.optimized_mir(def_id);
+
+            // Create initial argument types.
+            let arg_tys = (1..=body.arg_count)
+                .map(|local| {
+                    let arg_ty = body.local_decls[local.into()].ty;
+                    TrackedTy::determine(arg_ty)
+                })
+                .collect_vec();
+
             // Check for unresolved generic types or consts.
-            let contains_unresolved_generics =
-                generics.params.iter().any(|generic| match generic.kind {
-                    GenericParamKind::Lifetime { .. } => false,
-                    GenericParamKind::Type { .. } => true,
-                    GenericParamKind::Const { .. } => true,
-                });
+            let contains_unresolved_generics = arg_tys.iter().any(|arg| match arg {
+                TrackedTy::Simple(..) => false,
+                TrackedTy::Erased(..) => true,
+            });
+
             if contains_unresolved_generics {
                 return Some(PurityAnalysisResult::new(
                     def_id,
@@ -145,13 +162,18 @@ fn analyze_item<'tcx>(
             }
 
             // Check for mutable arguments.
-            let contains_mutable_args = fn_sig.decl.inputs.iter().any(|arg| {
-                if let TyKind::Ref(_, mut_ty) = &arg.kind {
-                    return mut_ty.mutbl == Mutability::Mut;
+            let contains_mutable_args = arg_tys.iter().any(|arg| {
+                let main_ty = match arg {
+                    TrackedTy::Simple(ty) => ty,
+                    TrackedTy::Erased(ty, ..) => ty,
+                };
+                if let ty::TyKind::Ref(.., mutbl) = main_ty.kind() {
+                    return mutbl.to_owned() == Mutability::Mut;
                 } else {
                     return false;
                 }
             });
+
             if contains_mutable_args {
                 return Some(PurityAnalysisResult::new(
                     def_id,
@@ -163,6 +185,12 @@ fn analyze_item<'tcx>(
                     vec![],
                 ));
             }
+
+            // Retrieve the instance, as we know it exists.
+            let instance = ty::Instance::mono(tcx, def_id);
+            trace!("current instance {:?}", &instance);
+
+            let storage = Rc::new(RefCell::new(FnCallStorage::new(def_id)));
 
             // Calculate important locals.
             let important_locals = {
@@ -181,7 +209,7 @@ fn analyze_item<'tcx>(
                         let arg_place = Place::make(arg_local, &[], tcx);
                         return (arg_place, LocationOrArg::Arg(arg_local));
                     })
-                    .collect::<Vec<_>>()];
+                    .collect_vec()];
                 ImportantLocals::new(compute_dependent_locals(
                     tcx,
                     def_id,
@@ -190,32 +218,15 @@ fn analyze_item<'tcx>(
                 ))
             };
 
-            // Retrieve body.
-            let body = tcx.optimized_mir(def_id);
-
-            // Create initial argument types.
-            let arg_tys: Vec<RefinedTy> = (1..=body.arg_count)
-                .map(|local| {
-                    let arg_ty = body.local_decls[local.into()].ty;
-                    RefinedTy::Simple(arg_ty)
-                })
-                .collect();
-
-            // Retrieve the instance, as we know it exists.
-            let instance = ty::Instance::mono(tcx, def_id);
-
-            // Construct the visitor.
-            let mut visitor = FnVisitor::new(
-                def_id,
+            TypeTracker::new(
+                FnData::new(instance, arg_tys, important_locals),
+                storage.clone(),
                 tcx,
-                FnData::new(arg_tys, instance, important_locals, tcx),
-            );
+            )
+            .run();
 
-            // Begin the traversal.
-            visitor.visit_body(body);
-
-            // Dump traversal results.
-            Some(visitor.get_storage_clone().dump(annotated_pure))
+            let storage_owned = storage.borrow().to_owned();
+            Some(storage_owned.dump(annotated_pure))
         } else {
             None
         }

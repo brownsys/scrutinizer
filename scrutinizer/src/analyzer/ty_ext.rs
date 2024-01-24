@@ -31,6 +31,7 @@ impl<'tcx> TyExt<'tcx> for Ty<'tcx> {
     }
     // TODO: revisit this, I am not sure this is exhaustive.
     fn contains_erased(&self) -> bool {
-        !self.contains_closure() && (self.contains_param() || self.contains_trait() || self.contains_impl_trait())
+        !self.contains_closure()
+            && (self.contains_param() || self.contains_trait() || self.contains_impl_trait())
     }
 }
