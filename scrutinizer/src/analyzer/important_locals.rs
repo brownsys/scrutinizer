@@ -10,7 +10,7 @@ use rustc_utils::PlaceExt;
 use std::ops::Deref;
 
 // Newtype for a vec of locals.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ImportantLocals(Vec<Local>);
 
 impl Deref for ImportantLocals {

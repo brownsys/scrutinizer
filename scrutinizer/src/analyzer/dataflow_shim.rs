@@ -5,7 +5,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_mir_dataflow::{Analysis, AnalysisDomain, Direction, Engine, JoinSemiLattice, Results};
 use std::mem::transmute;
 
-use super::type_tracker::TypeTracker;
+use super::type_tracker::TypeCollector;
 
 #[allow(dead_code)]
 pub struct EngineShim<'a, 'tcx, A>
@@ -30,9 +30,9 @@ where
 }
 
 pub fn iterate_to_fixpoint<'a, 'tcx>(
-    engine: Engine<'a, 'tcx, TypeTracker<'tcx>>,
-) -> Results<'tcx, TypeTracker<'tcx>> {
-    let engine: EngineShim<'a, 'tcx, TypeTracker> = unsafe { transmute(engine) };
+    engine: Engine<'a, 'tcx, TypeCollector<'tcx>>,
+) -> Results<'tcx, TypeCollector<'tcx>> {
+    let engine: EngineShim<'a, 'tcx, TypeCollector> = unsafe { transmute(engine) };
     let EngineShim {
         analysis,
         body,
@@ -44,7 +44,7 @@ pub fn iterate_to_fixpoint<'a, 'tcx>(
 
     let mut dirty_queue: WorkQueue<BasicBlock> = WorkQueue::with_none(body.basic_blocks.len());
 
-    if <TypeTracker<'tcx> as AnalysisDomain>::Direction::IS_FORWARD {
+    if <TypeCollector<'tcx> as AnalysisDomain>::Direction::IS_FORWARD {
         for (bb, _) in traversal::reverse_postorder(body) {
             dirty_queue.insert(bb);
         }
@@ -71,18 +71,18 @@ pub fn iterate_to_fixpoint<'a, 'tcx>(
         // Apply the block transfer function, using the cached one if it exists.
         match &apply_trans_for_block {
             Some(apply) => apply(bb, &mut state),
-            None => <TypeTracker<'tcx> as AnalysisDomain>::Direction::apply_effects_in_block(
+            None => <TypeCollector<'tcx> as AnalysisDomain>::Direction::apply_effects_in_block(
                 &analysis, &mut state, bb, bb_data,
             ),
         }
 
-        <TypeTracker<'tcx> as AnalysisDomain>::Direction::join_state_into_successors_of(
+        <TypeCollector<'tcx> as AnalysisDomain>::Direction::join_state_into_successors_of(
             &analysis,
             tcx,
             body,
             &mut state,
             (bb, bb_data),
-            |target: BasicBlock, state: &<TypeTracker<'tcx> as AnalysisDomain>::Domain| {
+            |target: BasicBlock, state: &<TypeCollector<'tcx> as AnalysisDomain>::Domain| {
                 let set_changed = entry_sets[target].join(state);
                 if set_changed {
                     dirty_queue.insert(target);
@@ -91,7 +91,7 @@ pub fn iterate_to_fixpoint<'a, 'tcx>(
         );
     }
 
-    let results: Results<'tcx, TypeTracker<'tcx>> = unsafe {
+    let results: Results<'tcx, TypeCollector<'tcx>> = unsafe {
         transmute(ResultsShim {
             analysis,
             entry_sets,

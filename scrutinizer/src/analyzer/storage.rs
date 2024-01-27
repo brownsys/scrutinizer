@@ -1,9 +1,13 @@
 use regex::Regex;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::Terminator;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use super::fn_call_info::FnCallInfo;
 use super::result::PurityAnalysisResult;
+
+pub type FnCallStorageRef<'tcx> = Rc<RefCell<FnCallStorage<'tcx>>>;
 
 #[derive(Clone)]
 pub struct FnCallStorage<'tcx> {

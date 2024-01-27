@@ -16,7 +16,6 @@ pub enum FnCallInfo<'tcx> {
     WithoutBody {
         from: DefId,
         def_id: DefId,
-        tracked_args: Vec<TrackedTy<'tcx>>,
     },
 }
 
@@ -44,13 +43,11 @@ impl<'tcx> Serialize for FnCallInfo<'tcx> {
             FnCallInfo::WithoutBody {
                 ref def_id,
                 ref from,
-                ref tracked_args,
             } => {
                 let mut tv =
                     serializer.serialize_struct_variant("FnCallInfo", 1, "WithoutBody", 3)?;
                 tv.serialize_field("from", format!("{:?}", from).as_str())?;
                 tv.serialize_field("def_id", format!("{:?}", def_id).as_str())?;
-                tv.serialize_field("tracked_args", &tracked_args)?;
                 tv.end()
             }
         }

@@ -2,7 +2,7 @@
 #![feature(rustc_private)]
 
 mod analyzer;
-mod vartrack;
+// mod vartrack;
 
 extern crate rustc_borrowck;
 extern crate rustc_data_structures;
@@ -17,26 +17,24 @@ extern crate rustc_span;
 extern crate rustc_trait_selection;
 
 use analyzer::{
-    FnCallStorage, FnData, ImportantLocals, PurityAnalysisResult, TrackedTy, TypeTracker,
+    FnCallInfo, FnCallStorage, FnData, HasRawPtrDeref, PurityAnalysisResult, TrackedTy,
+    TypeCollector,
 };
 use clap::Parser;
-use flowistry::indexed::impls::LocationOrArg;
-use flowistry::infoflow::Direction;
 use itertools::Itertools;
 use log::trace;
 use rustc_hir::{ItemId, ItemKind};
-use rustc_middle::mir::{Local, Mutability, Place};
+use rustc_middle::mir::Mutability;
 use rustc_middle::ty;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
-use rustc_utils::PlaceExt;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
-use vartrack::compute_dependent_locals;
 
 pub struct ScrutinizerPlugin;
 
@@ -131,7 +129,7 @@ fn analyze_item<'tcx>(
     if args.function.as_str().is_empty()
         || item.ident.name == rustc_span::symbol::Symbol::intern(args.function.as_str())
     {
-        if let ItemKind::Fn(fn_sig, ..) = &item.kind {
+        if let ItemKind::Fn(..) = &item.kind {
             // Retrieve body.
             let body = tcx.optimized_mir(def_id);
 
@@ -139,13 +137,13 @@ fn analyze_item<'tcx>(
             let arg_tys = (1..=body.arg_count)
                 .map(|local| {
                     let arg_ty = body.local_decls[local.into()].ty;
-                    TrackedTy::determine(arg_ty)
+                    TrackedTy::from_ty(arg_ty)
                 })
                 .collect_vec();
 
             // Check for unresolved generic types or consts.
             let contains_unresolved_generics = arg_tys.iter().any(|arg| match arg {
-                TrackedTy::Simple(..) => false,
+                TrackedTy::Present(..) => false,
                 TrackedTy::Erased(..) => true,
             });
 
@@ -164,7 +162,7 @@ fn analyze_item<'tcx>(
             // Check for mutable arguments.
             let contains_mutable_args = arg_tys.iter().any(|arg| {
                 let main_ty = match arg {
-                    TrackedTy::Simple(ty) => ty,
+                    TrackedTy::Present(ty) => ty,
                     TrackedTy::Erased(ty, ..) => ty,
                 };
                 if let ty::TyKind::Ref(.., mutbl) = main_ty.kind() {
@@ -190,42 +188,28 @@ fn analyze_item<'tcx>(
             let instance = ty::Instance::mono(tcx, def_id);
             trace!("current instance {:?}", &instance);
 
-            let storage = Rc::new(RefCell::new(FnCallStorage::new(def_id)));
+            let fn_storage = Rc::new(RefCell::new(FnCallStorage::new(def_id)));
+            let upvar_storage = Rc::new(RefCell::new(HashMap::new()));
 
-            // Calculate important locals.
-            let important_locals = {
-                // Parse important arguments.
-                let important_args = if args.important_args.is_empty() {
-                    // If no important arguments are provided, assume all are important.
-                    let n_args = fn_sig.decl.inputs.len();
-                    (1..=n_args).collect()
-                } else {
-                    args.important_args.clone()
-                };
-                let targets = vec![important_args
-                    .iter()
-                    .map(|arg| {
-                        let arg_local = Local::from_usize(*arg);
-                        let arg_place = Place::make(arg_local, &[], tcx);
-                        return (arg_place, LocationOrArg::Arg(arg_local));
-                    })
-                    .collect_vec()];
-                ImportantLocals::new(compute_dependent_locals(
-                    tcx,
-                    def_id,
-                    targets,
-                    Direction::Forward,
-                ))
+            let current_fn = FnData::new(instance, arg_tys, None);
+
+            let results =
+                TypeCollector::new(current_fn.clone(), fn_storage.clone(), upvar_storage, tcx)
+                    .run();
+
+            trace!("results for {:?} are {:?}", def_id, results);
+
+            let fn_call_info = FnCallInfo::WithBody {
+                def_id,
+                from: def_id,
+                span: body.span,
+                tracked_args: current_fn.tracked_args().to_owned(),
+                raw_ptr_deref: body.has_raw_ptr_deref(tcx),
             };
 
-            TypeTracker::new(
-                FnData::new(instance, arg_tys, important_locals),
-                storage.clone(),
-                tcx,
-            )
-            .run();
+            fn_storage.borrow_mut().add_call(fn_call_info);
 
-            let storage_owned = storage.borrow().to_owned();
+            let storage_owned = fn_storage.borrow().to_owned();
             Some(storage_owned.dump(annotated_pure))
         } else {
             None

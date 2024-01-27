@@ -11,6 +11,7 @@ mod lambdas;
 mod linked_list;
 mod misc;
 mod raw_ptr;
+mod structs;
 mod vartrack;
 mod vec;
 

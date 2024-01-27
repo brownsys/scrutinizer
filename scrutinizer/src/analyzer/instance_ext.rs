@@ -19,7 +19,7 @@ impl<'tcx> InstanceExt<'tcx> for ty::Instance<'tcx> {
         };
         sig.inputs()
             .iter()
-            .map(|ty| TrackedTy::determine(ty.to_owned()))
+            .map(|ty| TrackedTy::from_ty(ty.to_owned()))
             .collect()
     }
 }
