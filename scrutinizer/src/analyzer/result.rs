@@ -3,15 +3,15 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::mir::Terminator;
 use serde::ser::{Serialize, SerializeStruct};
 
-use super::fn_call_info::FnCallInfo;
+use super::fn_info::FnInfo;
 
 pub struct PurityAnalysisResult<'tcx> {
     def_id: DefId,
     annotated_pure: bool,
     status: bool,
     reason: String,
-    passing: Vec<FnCallInfo<'tcx>>,
-    failing: Vec<FnCallInfo<'tcx>>,
+    passing: Vec<FnInfo<'tcx>>,
+    failing: Vec<FnInfo<'tcx>>,
     unhandled: Vec<Terminator<'tcx>>,
 }
 
@@ -47,8 +47,8 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
         annotated_pure: bool,
         status: bool,
         reason: String,
-        passing: Vec<FnCallInfo<'tcx>>,
-        failing: Vec<FnCallInfo<'tcx>>,
+        passing: Vec<FnInfo<'tcx>>,
+        failing: Vec<FnInfo<'tcx>>,
         unhandled: Vec<Terminator<'tcx>>,
     ) -> Self {
         Self {

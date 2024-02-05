@@ -1,9 +1,11 @@
 #![feature(box_patterns)]
 #![feature(rustc_private)]
 
-mod analyzer;
+// mod analyzer;
+mod collector;
 // mod vartrack;
 
+extern crate rustc_abi;
 extern crate rustc_borrowck;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
@@ -16,15 +18,11 @@ extern crate rustc_mir_dataflow;
 extern crate rustc_span;
 extern crate rustc_trait_selection;
 
-use analyzer::{
-    FnCallInfo, FnCallStorage, FnData, HasRawPtrDeref, PurityAnalysisResult, TrackedTy,
-    TypeCollector,
-};
 use clap::Parser;
+use collector::{Callee, FnInfo, FnInfoStorage, TrackedTy, TypeCollector, VirtualStack};
 use itertools::Itertools;
 use log::trace;
 use rustc_hir::{ItemId, ItemKind};
-use rustc_middle::mir::Mutability;
 use rustc_middle::ty;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
 use serde::{Deserialize, Serialize};
@@ -103,11 +101,10 @@ impl rustc_driver::Callbacks for ScrutinizerCallbacks {
 fn scrutinizer<'tcx>(
     tcx: ty::TyCtxt<'tcx>,
     args: &ScrutinizerPluginArgs,
-) -> Vec<PurityAnalysisResult<'tcx>> {
+) -> Vec<Vec<FnInfo<'tcx>>> {
     tcx.hir()
         .items()
         .filter_map(|item_id| analyze_item(item_id, tcx.to_owned(), args))
-        .filter(|result| result.is_inconsistent())
         .collect()
 }
 
@@ -115,7 +112,7 @@ fn analyze_item<'tcx>(
     item_id: ItemId,
     tcx: ty::TyCtxt<'tcx>,
     args: &ScrutinizerPluginArgs,
-) -> Option<PurityAnalysisResult<'tcx>> {
+) -> Option<Vec<FnInfo<'tcx>>> {
     let hir = tcx.hir();
     let item = hir.item(item_id);
     let def_id = item.owner_id.to_def_id();
@@ -141,76 +138,78 @@ fn analyze_item<'tcx>(
                 })
                 .collect_vec();
 
-            // Check for unresolved generic types or consts.
-            let contains_unresolved_generics = arg_tys.iter().any(|arg| match arg {
-                TrackedTy::Present(..) => false,
-                TrackedTy::Erased(..) => true,
-            });
+            // // Check for unresolved generic types or consts.
+            // let contains_unresolved_generics = arg_tys.iter().any(|arg| match arg {
+            //     TrackedTy::Present(..) => false,
+            //     TrackedTy::Erased(..) => true,
+            // });
 
-            if contains_unresolved_generics {
-                return Some(PurityAnalysisResult::new(
-                    def_id,
-                    annotated_pure,
-                    false,
-                    String::from("unresolved generics detected"),
-                    vec![],
-                    vec![],
-                    vec![],
-                ));
-            }
+            // if contains_unresolved_generics {
+            //     return Some(PurityAnalysisResult::new(
+            //         def_id,
+            //         annotated_pure,
+            //         false,
+            //         String::from("unresolved generics detected"),
+            //         vec![],
+            //         vec![],
+            //         vec![],
+            //     ));
+            // }
 
-            // Check for mutable arguments.
-            let contains_mutable_args = arg_tys.iter().any(|arg| {
-                let main_ty = match arg {
-                    TrackedTy::Present(ty) => ty,
-                    TrackedTy::Erased(ty, ..) => ty,
-                };
-                if let ty::TyKind::Ref(.., mutbl) = main_ty.kind() {
-                    return mutbl.to_owned() == Mutability::Mut;
-                } else {
-                    return false;
-                }
-            });
+            // // Check for mutable arguments.
+            // let contains_mutable_args = arg_tys.iter().any(|arg| {
+            //     let main_ty = match arg {
+            //         TrackedTy::Present(ty) => ty,
+            //         TrackedTy::Erased(ty, ..) => ty,
+            //     };
+            //     if let ty::TyKind::Ref(.., mutbl) = main_ty.kind() {
+            //         return mutbl.to_owned() == Mutability::Mut;
+            //     } else {
+            //         return false;
+            //     }
+            // });
 
-            if contains_mutable_args {
-                return Some(PurityAnalysisResult::new(
-                    def_id,
-                    annotated_pure,
-                    false,
-                    String::from("mutable arguments detected"),
-                    vec![],
-                    vec![],
-                    vec![],
-                ));
-            }
+            // if contains_mutable_args {
+            //     return Some(PurityAnalysisResult::new(
+            //         def_id,
+            //         annotated_pure,
+            //         false,
+            //         String::from("mutable arguments detected"),
+            //         vec![],
+            //         vec![],
+            //         vec![],
+            //     ));
+            // }
 
             // Retrieve the instance, as we know it exists.
             let instance = ty::Instance::mono(tcx, def_id);
             trace!("current instance {:?}", &instance);
 
-            let fn_storage = Rc::new(RefCell::new(FnCallStorage::new(def_id)));
+            let fn_storage = Rc::new(RefCell::new(FnInfoStorage::new(instance)));
             let upvar_storage = Rc::new(RefCell::new(HashMap::new()));
+            let virtual_stack = VirtualStack::new();
 
-            let current_fn = FnData::new(instance, arg_tys, None);
+            let current_fn = Callee::new_function(instance, arg_tys);
 
-            let results =
-                TypeCollector::new(current_fn.clone(), fn_storage.clone(), upvar_storage, tcx)
-                    .run();
+            let results = TypeCollector::new(
+                current_fn.clone(),
+                fn_storage.clone(),
+                virtual_stack,
+                upvar_storage,
+                tcx,
+            )
+            .run();
 
-            trace!("results for {:?} are {:?}", def_id, results);
-
-            let fn_call_info = FnCallInfo::WithBody {
-                def_id,
-                from: def_id,
+            let fn_call_info = FnInfo::Regular {
+                parent: instance,
+                instance,
+                places: results.places,
                 span: body.span,
-                tracked_args: current_fn.tracked_args().to_owned(),
-                raw_ptr_deref: body.has_raw_ptr_deref(tcx),
             };
 
-            fn_storage.borrow_mut().add_call(fn_call_info);
-
-            let storage_owned = fn_storage.borrow().to_owned();
-            Some(storage_owned.dump(annotated_pure))
+            fn_storage.borrow_mut().add_fn(fn_call_info);
+            let dump = fn_storage.borrow().dump();
+            Some(dump)
         } else {
             None
         }

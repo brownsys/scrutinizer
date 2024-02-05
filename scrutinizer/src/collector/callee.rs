@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use log::debug;
+use log::trace;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 
@@ -8,70 +8,120 @@ use super::tracked_ty::TrackedTy;
 use super::upvar_tracker::{TrackedUpvars, UpvarTrackerRef};
 
 #[derive(Clone, Debug)]
-pub struct FnData<'tcx> {
-    instance: ty::Instance<'tcx>,
-    tracked_args: Vec<TrackedTy<'tcx>>,
-    tracked_upvars: Option<TrackedUpvars<'tcx>>,
-}
-
-impl<'tcx> FnData<'tcx> {
-    pub fn new(
+pub enum Callee<'tcx> {
+    Function {
         instance: ty::Instance<'tcx>,
         tracked_args: Vec<TrackedTy<'tcx>>,
-        tracked_upvars: Option<TrackedUpvars<'tcx>>,
+    },
+    Closure {
+        instance: ty::Instance<'tcx>,
+        tracked_args: Vec<TrackedTy<'tcx>>,
+        tracked_upvars: TrackedUpvars<'tcx>,
+    },
+}
+
+impl<'tcx> Callee<'tcx> {
+    pub fn new_function(instance: ty::Instance<'tcx>, tracked_args: Vec<TrackedTy<'tcx>>) -> Self {
+        Self::Function {
+            instance,
+            tracked_args,
+        }
+    }
+
+    pub fn is_function(&self) -> bool {
+        match self {
+            Callee::Function { .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_closure(&self) -> bool {
+        match self {
+            Callee::Closure { .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn new_closure(
+        instance: ty::Instance<'tcx>,
+        tracked_args: Vec<TrackedTy<'tcx>>,
+        tracked_upvars: TrackedUpvars<'tcx>,
     ) -> Self {
-        Self {
+        Self::Closure {
             instance,
             tracked_args,
             tracked_upvars,
         }
     }
+
     pub fn instance(&self) -> &ty::Instance<'tcx> {
-        &self.instance
+        match self {
+            Self::Function { instance, .. } | Self::Closure { instance, .. } => instance,
+        }
     }
+
     pub fn tracked_args(&self) -> &Vec<TrackedTy<'tcx>> {
-        &self.tracked_args
+        match self {
+            Self::Function { tracked_args, .. } | Self::Closure { tracked_args, .. } => {
+                tracked_args
+            }
+        }
     }
-    pub fn upvars(&self) -> &Option<TrackedUpvars<'tcx>> {
-        &self.tracked_upvars
+
+    pub fn expect_upvars(&self) -> &TrackedUpvars<'tcx> {
+        match self {
+            Callee::Closure { tracked_upvars, .. } => tracked_upvars,
+            _ => panic!("no upvars associated with function"),
+        }
     }
+
     fn merge_args(
         inferred_args: Vec<TrackedTy<'tcx>>,
         provided_args: Vec<TrackedTy<'tcx>>,
     ) -> Vec<TrackedTy<'tcx>> {
-        inferred_args
+        assert!(inferred_args.len() == provided_args.len());
+        let merged = inferred_args
             .into_iter()
             .zip(provided_args.into_iter())
             .map(|(inferred, provided)| match provided {
                 TrackedTy::Present(..) => provided,
                 TrackedTy::Erased(..) => inferred,
             })
-            .collect_vec()
+            .collect_vec();
+        merged
     }
 
-    pub fn generate_new_fn_data(
+    fn assemble_callee(
         instance: ty::Instance<'tcx>,
         substs: ty::SubstsRef<'tcx>,
         arg_tys: &Vec<TrackedTy<'tcx>>,
         upvar_tracker: UpvarTrackerRef<'tcx>,
         tcx: TyCtxt<'tcx>,
-    ) -> FnData<'tcx> {
+    ) -> Callee<'tcx> {
         let inferred_args = if tcx.is_closure(instance.def_id()) {
-            arg_tys[1].spread_tuple()
+            let mut closure_args = vec![arg_tys[0].clone()];
+            closure_args.extend(arg_tys[1].spread_tuple().into_iter());
+            closure_args
         } else {
             arg_tys.clone()
         };
         let provided_args = instance.arg_tys(tcx);
         let merged_arg_tys = Self::merge_args(inferred_args, provided_args);
-        let upvars = if tcx.is_closure(instance.def_id()) {
-            let closure_ty = substs[0].expect_ty();
+
+        if tcx.is_closure(instance.def_id()) {
+            let closure_ty = match substs[0].expect_ty().kind() {
+                ty::TyKind::Closure(def_id, ..) => tcx.type_of(def_id).subst_identity(),
+                _ => unreachable!(),
+            };
+            dbg!(closure_ty, &upvar_tracker);
             let upvar_tracker = upvar_tracker.borrow();
-            let upvars = upvar_tracker.get(&closure_ty);
-            upvars.and_then(|upvars| Some(upvars.to_owned()))
+            match upvar_tracker.get(&closure_ty) {
+                Some(upvars) => Callee::new_closure(instance, merged_arg_tys, upvars.to_owned()),
+                None => Callee::new_function(instance, merged_arg_tys),
+            }
         } else {
-            None
-        };
-        FnData::new(instance, merged_arg_tys, upvars)
+            Callee::new_function(instance, merged_arg_tys)
+        }
     }
 
     // Try resolving partial function data to full function data.
@@ -81,15 +131,7 @@ impl<'tcx> FnData<'tcx> {
         arg_tys: &Vec<TrackedTy<'tcx>>,
         upvar_tracker: UpvarTrackerRef<'tcx>,
         tcx: TyCtxt<'tcx>,
-    ) -> Vec<FnData<'tcx>> {
-        if arg_tys.iter().any(|arg_ty| arg_ty.poisoned()) {
-            debug!(
-                "encountered a poisoned argument at {:?} {:?}",
-                def_id, arg_tys
-            );
-            return vec![];
-        }
-
+    ) -> Vec<Callee<'tcx>> {
         // Resolve function instances that need to be analyzed.
         let maybe_instance =
             ty::Instance::resolve(tcx, ty::ParamEnv::reveal_all(), def_id, substs).unwrap();
@@ -100,7 +142,7 @@ impl<'tcx> FnData<'tcx> {
         };
 
         let fns = if tcx.is_mir_available(def_id) {
-            vec![FnData::generate_new_fn_data(
+            vec![Callee::assemble_callee(
                 maybe_instance.unwrap(),
                 substs,
                 &arg_tys,
@@ -110,18 +152,17 @@ impl<'tcx> FnData<'tcx> {
         } else {
             // Extract all plausible instances if body is unavailable.
             let plausible_instances = Self::find_plausible_instances(def_id, &arg_tys, substs, tcx);
-            plausible_instances
+            trace!(
+                "finding plausible instances for def_id={:?}, arg_tys={:?}, substs={:?}, instances={:?}",
+                def_id, arg_tys, substs, plausible_instances
+            );
+            let assembled_callees = plausible_instances
                 .into_iter()
                 .map(|(instance, substs)| {
-                    FnData::generate_new_fn_data(
-                        instance,
-                        substs,
-                        &arg_tys,
-                        upvar_tracker.clone(),
-                        tcx,
-                    )
+                    Callee::assemble_callee(instance, substs, &arg_tys, upvar_tracker.clone(), tcx)
                 })
-                .collect()
+                .collect();
+            assembled_callees
         };
         fns
     }
@@ -132,7 +173,6 @@ impl<'tcx> FnData<'tcx> {
         substs: ty::SubstsRef<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> Vec<(ty::Instance<'tcx>, ty::SubstsRef<'tcx>)> {
-        // Short-circut on poisoned arguments.
         let generic_tys = tcx
             .fn_sig(def_id)
             .subst_identity()
@@ -142,7 +182,9 @@ impl<'tcx> FnData<'tcx> {
         // Generate all plausible substitutions for each generic.
         (0..substs.len())
             .map(|subst_index| {
-                Self::find_plausible_substs_for(arg_tys, &generic_tys, subst_index as u32)
+                let plausible_substs =
+                    Self::find_plausible_substs_for(arg_tys, &generic_tys, subst_index as u32);
+                plausible_substs
             })
             // Explore all possible combinations.
             .multi_cartesian_product()
@@ -190,15 +232,8 @@ impl<'tcx> FnData<'tcx> {
     ) -> Option<(ty::Instance<'tcx>, ty::SubstsRef<'tcx>)> {
         // Check if every substitution is a type.
         let new_substs: ty::SubstsRef = tcx.mk_substs(substs.as_slice());
-        // TODO: Sometimes this panics if generics are not properly bound.
         let new_instance =
             ty::Instance::resolve(tcx, ty::ParamEnv::reveal_all(), def_id, new_substs).unwrap();
-        new_instance.and_then(|instance| {
-            if tcx.is_mir_available(instance.def_id()) {
-                Some((instance, new_substs))
-            } else {
-                None
-            }
-        })
+        new_instance.and_then(|instance| Some((instance, new_substs)))
     }
 }

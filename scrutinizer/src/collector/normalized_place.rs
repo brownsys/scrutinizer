@@ -2,6 +2,7 @@ use rustc_middle::mir::Place;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
 use rustc_utils::PlaceExt;
+use serde::Serialize;
 use std::ops::Deref;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -22,5 +23,14 @@ impl<'tcx> Deref for NormalizedPlace<'tcx> {
 
     fn deref(&self) -> &Self::Target {
         &self.place
+    }
+}
+
+impl<'tcx> Serialize for NormalizedPlace<'tcx> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(format!("{:?}", self.place).as_str())
     }
 }

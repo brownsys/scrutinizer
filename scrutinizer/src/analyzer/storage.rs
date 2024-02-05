@@ -4,20 +4,28 @@ use rustc_middle::mir::Terminator;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::fn_call_info::FnCallInfo;
-use super::result::PurityAnalysisResult;
+use super::fn_info::FnInfo;
+use super::tracked_ty::TrackedTy;
 
-pub type FnCallStorageRef<'tcx> = Rc<RefCell<FnCallStorage<'tcx>>>;
+pub type SeenStorage<'tcx> = Rc<RefCell<Vec<SeenStorageItem<'tcx>>>>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SeenStorageItem<'tcx> {
+    pub def_id: DefId,
+    pub tracked_args: Vec<TrackedTy<'tcx>>,
+}
+
+pub type FnInfoStorageRef<'tcx> = Rc<RefCell<FnInfoStorage<'tcx>>>;
 
 #[derive(Clone)]
-pub struct FnCallStorage<'tcx> {
+pub struct FnInfoStorage<'tcx> {
     def_id: DefId,
-    fn_calls: Vec<FnCallInfo<'tcx>>,
+    fn_calls: Vec<FnInfo<'tcx>>,
     unhandled: Vec<Terminator<'tcx>>,
 }
 
-impl<'tcx> FnCallStorage<'tcx> {
-    pub fn new(def_id: DefId) -> FnCallStorage<'tcx> {
+impl<'tcx> FnInfoStorage<'tcx> {
+    pub fn new(def_id: DefId) -> FnInfoStorage<'tcx> {
         Self {
             def_id,
             fn_calls: vec![],
@@ -25,7 +33,7 @@ impl<'tcx> FnCallStorage<'tcx> {
         }
     }
 
-    pub fn add_call(&mut self, new_call: FnCallInfo<'tcx>) {
+    pub fn add_call(&mut self, new_call: FnInfo<'tcx>) {
         self.fn_calls.push(new_call);
     }
 
@@ -33,18 +41,34 @@ impl<'tcx> FnCallStorage<'tcx> {
         self.unhandled.push(new_unhandled);
     }
 
-    pub fn encountered_fn_call(&self, fn_call: &FnCallInfo<'tcx>) -> bool {
-        self.fn_calls.contains(fn_call)
+    pub fn get_fn_call(&self, def_id: DefId) -> Option<FnInfo<'tcx>> {
+        self.fn_calls
+            .iter()
+            .find(|call| match call {
+                FnInfo::Regular {
+                    def_id: call_def_id,
+                    ..
+                }
+                | FnInfo::Ambiguous {
+                    def_id: call_def_id,
+                    ..
+                }
+                | FnInfo::Extern {
+                    def_id: call_def_id,
+                    ..
+                } => call_def_id.to_owned() == def_id,
+            })
+            .cloned()
     }
 
-    fn check_fn_call_purity(&self, fn_call: &FnCallInfo) -> bool {
+    fn check_fn_call_purity(&self, fn_call: &FnInfo) -> bool {
         let allowed_libs = vec![
             Regex::new(r"core\[\w*\]::intrinsics").unwrap(),
             Regex::new(r"core\[\w*\]::panicking").unwrap(),
             Regex::new(r"alloc\[\w*\]::alloc").unwrap(),
         ];
         match fn_call {
-            FnCallInfo::WithBody {
+            FnInfo::Regular {
                 def_id,
                 raw_ptr_deref,
                 ..
@@ -52,7 +76,7 @@ impl<'tcx> FnCallStorage<'tcx> {
                 let def_path_str = format!("{:?}", def_id);
                 !raw_ptr_deref || (allowed_libs.iter().any(|lib| lib.is_match(&def_path_str)))
             }
-            FnCallInfo::WithoutBody { def_id, .. } => {
+            FnInfo::Ambiguous { def_id, .. } | FnInfo::Extern { def_id, .. } => {
                 let def_path_str = format!("{:?}", def_id);
                 allowed_libs.iter().any(|lib| lib.is_match(&def_path_str))
             }

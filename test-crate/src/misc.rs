@@ -12,11 +12,11 @@ pub fn foreign_crate(left: usize, right: usize) -> usize {
 }
 
 // Function with a side effect.
-#[doc = "impure"]
-pub fn println_side_effect(left: usize, right: usize) -> usize {
-    println!("{} {}", left, right);
-    left + right
-}
+// #[doc = "impure"]
+// pub fn println_side_effect(left: usize, right: usize) -> usize {
+//     println!("{} {}", left, right);
+//     left + right
+// }
 
 // Pure arithmetic function.
 #[doc = "pure"]
