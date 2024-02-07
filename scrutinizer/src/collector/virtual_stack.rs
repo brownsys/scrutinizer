@@ -1,6 +1,6 @@
 use rustc_hir::def_id::DefId;
 
-use super::tracked_ty::TrackedTy;
+use super::ArgTys;
 
 #[derive(Clone, Debug)]
 pub struct VirtualStack<'tcx> {
@@ -28,11 +28,11 @@ impl<'tcx> VirtualStack<'tcx> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VirtualStackItem<'tcx> {
     def_id: DefId,
-    tracked_args: Vec<TrackedTy<'tcx>>,
+    tracked_args: ArgTys<'tcx>,
 }
 
 impl<'tcx> VirtualStackItem<'tcx> {
-    pub fn new(def_id: DefId, tracked_args: Vec<TrackedTy<'tcx>>) -> Self {
+    pub fn new(def_id: DefId, tracked_args: ArgTys<'tcx>) -> Self {
         VirtualStackItem {
             def_id,
             tracked_args,

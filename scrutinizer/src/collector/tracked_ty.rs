@@ -1,22 +1,22 @@
 use itertools::Itertools;
-use log::debug;
 use rustc_middle::ty::Ty;
 use serde::ser::{Serialize, SerializeStructVariant};
 use std::collections::HashSet;
 use std::fmt::Debug;
 
 use super::ty_ext::TyExt;
+use crate::util::transpose;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrackedTy<'tcx> {
     Present(Ty<'tcx>),
-    Erased(Ty<'tcx>, HashSet<Ty<'tcx>>),
+    Erased(HashSet<Ty<'tcx>>),
 }
 
 impl<'tcx> TrackedTy<'tcx> {
     pub fn from_ty(ty: Ty<'tcx>) -> Self {
         if ty.contains_erased() {
-            TrackedTy::Erased(ty, HashSet::new())
+            TrackedTy::Erased(HashSet::new())
         } else {
             TrackedTy::Present(ty)
         }
@@ -24,13 +24,7 @@ impl<'tcx> TrackedTy<'tcx> {
     pub fn into_vec(&self) -> Vec<Ty<'tcx>> {
         match self {
             TrackedTy::Present(ty) => vec![ty.to_owned()],
-            TrackedTy::Erased(ty, deps) => {
-                if deps.is_empty() {
-                    vec![ty.to_owned()]
-                } else {
-                    deps.iter().cloned().collect_vec()
-                }
-            }
+            TrackedTy::Erased(deps) => deps.iter().cloned().collect_vec(),
         }
     }
     pub fn join(&mut self, other: &Self) -> bool {
@@ -49,16 +43,8 @@ impl<'tcx> TrackedTy<'tcx> {
     pub fn map(&self, lambda: impl Fn(Ty<'tcx>) -> Ty<'tcx>) -> TrackedTy<'tcx> {
         match self {
             TrackedTy::Present(ty) => TrackedTy::from_ty(lambda(ty.to_owned())),
-            TrackedTy::Erased(ty, deps) => {
-                let new_ty = lambda(ty.to_owned());
-                if new_ty.contains_erased() {
-                    TrackedTy::Erased(
-                        new_ty,
-                        deps.iter().map(|ty| lambda(ty.to_owned())).collect(),
-                    )
-                } else {
-                    TrackedTy::Present(new_ty)
-                }
+            TrackedTy::Erased(deps) => {
+                TrackedTy::Erased(deps.iter().map(|ty| lambda(ty.to_owned())).collect())
             }
         }
     }
@@ -67,39 +53,31 @@ impl<'tcx> TrackedTy<'tcx> {
         // we consider it poisoned, as it can never be resolved with certainty.
         match self {
             TrackedTy::Present(_) => false,
-            TrackedTy::Erased(_, deps) => deps.iter().any(|ty| ty.contains_erased()),
+            TrackedTy::Erased(deps) => deps.iter().any(|ty| ty.contains_erased()),
         }
     }
     pub fn spread_tuple(&self) -> Vec<TrackedTy<'tcx>> {
-        let spread = match self {
+        match self {
             TrackedTy::Present(ty) => ty
                 .tuple_fields()
                 .iter()
                 .map(|ty| TrackedTy::from_ty(ty))
                 .collect(),
-            TrackedTy::Erased(ty, deps) => {
-                let mut base_tys = ty
-                    .tuple_fields()
-                    .iter()
-                    .map(|ty| TrackedTy::from_ty(ty))
-                    .collect_vec();
-                deps.iter().for_each(|dep_ty| {
-                    let dep_tys_instance = dep_ty
-                        .tuple_fields()
+            TrackedTy::Erased(deps) => {
+                if !deps.is_empty() {
+                    let spread = deps
                         .iter()
-                        .map(|ty| TrackedTy::from_ty(ty))
+                        .map(|dep_ty| dep_ty.tuple_fields().into_iter().collect_vec())
                         .collect_vec();
-                    dep_tys_instance.iter().zip(base_tys.iter_mut()).for_each(
-                        |(dep_ty, base_ty)| {
-                            base_ty.join(dep_ty);
-                        },
-                    );
-                });
-                base_tys
+                    transpose(spread)
+                        .into_iter()
+                        .map(|v| TrackedTy::Erased(HashSet::from_iter(v.into_iter())))
+                        .collect_vec()
+                } else {
+                    vec![]
+                }
             }
-        };
-        debug!("spread tuple: from {:?} to {:?}", self, spread);
-        spread
+        }
     }
 }
 
@@ -114,12 +92,11 @@ impl<'tcx> Serialize for TrackedTy<'tcx> {
                 tv.serialize_field("ty", format!("{:?}", ty).as_str())?;
                 tv.end()
             }
-            TrackedTy::Erased(ref ty, ref vec_ty) => {
-                let mut tv = serializer.serialize_struct_variant("TrackedTy", 1, "Erased", 2)?;
-                tv.serialize_field("ty", format!("{:?}", ty).as_str())?;
+            TrackedTy::Erased(ref deps) => {
+                let mut tv = serializer.serialize_struct_variant("TrackedTy", 1, "Erased", 1)?;
                 tv.serialize_field(
                     "deps",
-                    &vec_ty.iter().map(|ty| format!("{:?}", ty)).collect_vec(),
+                    &deps.iter().map(|ty| format!("{:?}", ty)).collect_vec(),
                 )?;
                 tv.end()
             }

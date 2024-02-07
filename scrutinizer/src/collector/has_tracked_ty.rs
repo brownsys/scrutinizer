@@ -4,18 +4,18 @@ use rustc_middle::mir::{AggregateKind, BinOp, CastKind, NullOp, Operand, Place, 
 use rustc_middle::ty::{self, TyCtxt};
 use std::collections::HashSet;
 
-use crate::collector::upvar_tracker::TrackedUpvars;
+use crate::collector::closure_info::ClosureInfo;
 
+use super::closure_info::ClosureInfoStorageRef;
 use super::normalized_place::NormalizedPlace;
 use super::tracked_ty::TrackedTy;
 use super::type_tracker::TypeTracker;
-use super::upvar_tracker::UpvarTrackerRef;
 
 pub trait HasTrackedTy<'tcx> {
     fn tracked_ty(
         &self,
         type_tracker: &mut TypeTracker<'tcx>,
-        upvar_tracker: UpvarTrackerRef<'tcx>,
+        upvar_tracker: ClosureInfoStorageRef<'tcx>,
         instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> TrackedTy<'tcx>;
@@ -25,17 +25,21 @@ impl<'tcx> HasTrackedTy<'tcx> for Place<'tcx> {
     fn tracked_ty(
         &self,
         type_tracker: &mut TypeTracker<'tcx>,
-        _upvar_tracker: UpvarTrackerRef<'tcx>,
+        _upvar_tracker: ClosureInfoStorageRef<'tcx>,
         instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> TrackedTy<'tcx> {
         let def_id = instance.def_id();
-        let body = tcx.optimized_mir(def_id);
+        let body = instance.subst_mir_and_normalize_erasing_regions(
+            tcx,
+            ty::ParamEnv::reveal_all(),
+            tcx.optimized_mir(def_id).to_owned(),
+        );
         type_tracker
             .places
             .get(&NormalizedPlace::from_place(self, tcx, def_id))
             .and_then(|ty| Some(ty.to_owned()))
-            .unwrap_or(TrackedTy::from_ty(self.ty(body, tcx).ty).to_owned())
+            .unwrap_or(TrackedTy::from_ty(self.ty(&body, tcx).ty).to_owned())
     }
 }
 
@@ -43,7 +47,7 @@ impl<'tcx> HasTrackedTy<'tcx> for Operand<'tcx> {
     fn tracked_ty(
         &self,
         type_tracker: &mut TypeTracker<'tcx>,
-        upvar_tracker: UpvarTrackerRef<'tcx>,
+        upvar_tracker: ClosureInfoStorageRef<'tcx>,
         instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> TrackedTy<'tcx> {
@@ -72,7 +76,7 @@ impl<'tcx> HasTrackedTy<'tcx> for BinOpWithTys<'tcx> {
     fn tracked_ty(
         &self,
         _type_tracker: &mut TypeTracker<'tcx>,
-        _upvar_tracker: UpvarTrackerRef<'tcx>,
+        _upvar_tracker: ClosureInfoStorageRef<'tcx>,
         _instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> TrackedTy<'tcx> {
@@ -102,7 +106,7 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
     fn tracked_ty(
         &self,
         type_tracker: &mut TypeTracker<'tcx>,
-        upvar_tracker: UpvarTrackerRef<'tcx>,
+        upvar_tracker: ClosureInfoStorageRef<'tcx>,
         instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> TrackedTy<'tcx> {
@@ -118,16 +122,21 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
             Rvalue::ThreadLocalRef(did) => {
                 let ty = tcx.thread_local_ptr_ty(did);
                 if ty.is_closure() {
+                    let closure_def_id = if let ty::TyKind::Closure(def_id, ..) = ty.kind() {
+                        def_id.to_owned()
+                    } else {
+                        unreachable!();
+                    };
                     let resolved_closure_ty = instance.subst_mir_and_normalize_erasing_regions(
                         tcx,
                         ty::ParamEnv::reveal_all(),
                         ty,
                     );
                     upvar_tracker.borrow_mut().insert(
-                        ty,
-                        TrackedUpvars {
+                        closure_def_id,
+                        ClosureInfo {
                             upvars: vec![],
-                            resolved_ty: resolved_closure_ty,
+                            with_substs: resolved_closure_ty,
                         },
                     );
                 };
@@ -162,17 +171,9 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                 let tracked_ty =
                     operand.tracked_ty(type_tracker, upvar_tracker.clone(), instance, tcx);
                 match cast_kind {
-                    CastKind::PointerFromExposedAddress => {
-                        assert!(ty.is_unsafe_ptr());
-                        if ty.is_mutable_ptr() {
-                            tracked_ty
-                                .map(|ty| tcx.mk_mut_ref(tcx.mk_region_from_kind(ty::ReErased), ty))
-                        } else {
-                            tracked_ty
-                                .map(|ty| tcx.mk_imm_ref(tcx.mk_region_from_kind(ty::ReErased), ty))
-                        }
-                    }
-                    CastKind::Transmute => TrackedTy::from_ty(ty.to_owned()),
+                    CastKind::PointerFromExposedAddress
+                    | CastKind::PointerExposeAddress
+                    | CastKind::Transmute => TrackedTy::from_ty(ty.to_owned()),
                     _ => tracked_ty,
                 }
             }
@@ -245,11 +246,6 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                             });
                             TrackedTy::from_ty(tcx.mk_tup_from_iter(ops))
                         } else {
-                            let heads = op_tys.iter().map(|ty| match ty {
-                                TrackedTy::Present(ty) => ty.to_owned(),
-                                TrackedTy::Erased(ty, ..) => ty.to_owned(),
-                            });
-                            let head_ty = tcx.mk_tup_from_iter(heads);
                             let deps = HashSet::from_iter(
                                 op_tys
                                     .iter()
@@ -262,7 +258,7 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                                     .multi_cartesian_product()
                                     .map(|tuple| tcx.mk_tup_from_iter(tuple.into_iter())),
                             );
-                            TrackedTy::Erased(head_ty, deps)
+                            TrackedTy::Erased(deps)
                         };
                         transformed_ty
                     }
@@ -298,10 +294,10 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                             .collect_vec();
                         debug!("making a closure={:?}, upvars={:?}", closure_ty, &upvar_tys);
                         upvar_tracker.borrow_mut().insert(
-                            closure_ty,
-                            TrackedUpvars {
+                            did,
+                            ClosureInfo {
                                 upvars: upvar_tys,
-                                resolved_ty: resolved_closure_ty,
+                                with_substs: resolved_closure_ty,
                             },
                         );
                         TrackedTy::from_ty(closure_ty)

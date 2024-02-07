@@ -3,6 +3,7 @@
 
 // mod analyzer;
 mod collector;
+mod util;
 // mod vartrack;
 
 extern crate rustc_abi;
@@ -19,9 +20,9 @@ extern crate rustc_span;
 extern crate rustc_trait_selection;
 
 use clap::Parser;
-use collector::{Callee, FnInfo, FnInfoStorage, TrackedTy, TypeCollector, VirtualStack};
+use collector::{ArgTys, Callee, FnInfo, FnInfoStorage, TrackedTy, TypeCollector, VirtualStack};
 use itertools::Itertools;
-use log::trace;
+use log::{error, trace};
 use rustc_hir::{ItemId, ItemKind};
 use rustc_middle::ty;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
@@ -181,6 +182,25 @@ fn analyze_item<'tcx>(
             //     ));
             // }
 
+            // Has generics.
+            let has_generics = ty::InternalSubsts::identity_for_item(tcx, def_id)
+                .iter()
+                .any(|param| match param.unpack() {
+                    ty::GenericArgKind::Lifetime(..) => false,
+                    ty::GenericArgKind::Type(..) => {
+                        error!("{:?} has type parameters", def_id);
+                        true
+                    }
+                    ty::GenericArgKind::Const(..) => {
+                        error!("{:?} has const parameters", def_id);
+                        true
+                    }
+                });
+
+            if has_generics {
+                return None;
+            }
+
             // Retrieve the instance, as we know it exists.
             let instance = ty::Instance::mono(tcx, def_id);
             trace!("current instance {:?}", &instance);
@@ -189,12 +209,12 @@ fn analyze_item<'tcx>(
             let upvar_storage = Rc::new(RefCell::new(HashMap::new()));
             let virtual_stack = VirtualStack::new();
 
-            let current_fn = Callee::new_function(instance, arg_tys);
+            let current_fn = Callee::new_function(instance, ArgTys::new(arg_tys));
 
             let results = TypeCollector::new(
                 current_fn.clone(),
-                fn_storage.clone(),
                 virtual_stack,
+                fn_storage.clone(),
                 upvar_storage,
                 tcx,
             )

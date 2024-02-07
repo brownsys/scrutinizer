@@ -3,25 +3,25 @@ use log::trace;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 
+use super::arg_tys::ArgTys;
+use super::closure_info::{ClosureInfo, ClosureInfoStorageRef};
 use super::instance_ext::InstanceExt;
-use super::tracked_ty::TrackedTy;
-use super::upvar_tracker::{TrackedUpvars, UpvarTrackerRef};
 
 #[derive(Clone, Debug)]
 pub enum Callee<'tcx> {
     Function {
         instance: ty::Instance<'tcx>,
-        tracked_args: Vec<TrackedTy<'tcx>>,
+        tracked_args: ArgTys<'tcx>,
     },
     Closure {
         instance: ty::Instance<'tcx>,
-        tracked_args: Vec<TrackedTy<'tcx>>,
-        tracked_upvars: TrackedUpvars<'tcx>,
+        tracked_args: ArgTys<'tcx>,
+        closure_info: ClosureInfo<'tcx>,
     },
 }
 
 impl<'tcx> Callee<'tcx> {
-    pub fn new_function(instance: ty::Instance<'tcx>, tracked_args: Vec<TrackedTy<'tcx>>) -> Self {
+    pub fn new_function(instance: ty::Instance<'tcx>, tracked_args: ArgTys<'tcx>) -> Self {
         Self::Function {
             instance,
             tracked_args,
@@ -44,13 +44,13 @@ impl<'tcx> Callee<'tcx> {
 
     pub fn new_closure(
         instance: ty::Instance<'tcx>,
-        tracked_args: Vec<TrackedTy<'tcx>>,
-        tracked_upvars: TrackedUpvars<'tcx>,
+        tracked_args: ArgTys<'tcx>,
+        closure_info: ClosureInfo<'tcx>,
     ) -> Self {
         Self::Closure {
             instance,
             tracked_args,
-            tracked_upvars,
+            closure_info,
         }
     }
 
@@ -60,7 +60,7 @@ impl<'tcx> Callee<'tcx> {
         }
     }
 
-    pub fn tracked_args(&self) -> &Vec<TrackedTy<'tcx>> {
+    pub fn tracked_args(&self) -> &ArgTys<'tcx> {
         match self {
             Self::Function { tracked_args, .. } | Self::Closure { tracked_args, .. } => {
                 tracked_args
@@ -68,56 +68,36 @@ impl<'tcx> Callee<'tcx> {
         }
     }
 
-    pub fn expect_upvars(&self) -> &TrackedUpvars<'tcx> {
+    pub fn expect_closure_info(&self) -> &ClosureInfo<'tcx> {
         match self {
-            Callee::Closure { tracked_upvars, .. } => tracked_upvars,
-            _ => panic!("no upvars associated with function"),
+            Callee::Closure { closure_info, .. } => closure_info,
+            _ => panic!("no upvars associated with function {:?}", self),
         }
-    }
-
-    fn merge_args(
-        inferred_args: Vec<TrackedTy<'tcx>>,
-        provided_args: Vec<TrackedTy<'tcx>>,
-    ) -> Vec<TrackedTy<'tcx>> {
-        assert!(inferred_args.len() == provided_args.len());
-        let merged = inferred_args
-            .into_iter()
-            .zip(provided_args.into_iter())
-            .map(|(inferred, provided)| match provided {
-                TrackedTy::Present(..) => provided,
-                TrackedTy::Erased(..) => inferred,
-            })
-            .collect_vec();
-        merged
     }
 
     fn assemble_callee(
         instance: ty::Instance<'tcx>,
         substs: ty::SubstsRef<'tcx>,
-        arg_tys: &Vec<TrackedTy<'tcx>>,
-        upvar_tracker: UpvarTrackerRef<'tcx>,
+        arg_tys: &ArgTys<'tcx>,
+        closure_info_storage: ClosureInfoStorageRef<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> Callee<'tcx> {
         let inferred_args = if tcx.is_closure(instance.def_id()) {
-            let mut closure_args = vec![arg_tys[0].clone()];
-            closure_args.extend(arg_tys[1].spread_tuple().into_iter());
-            closure_args
+            arg_tys.as_closure()
         } else {
-            arg_tys.clone()
+            arg_tys.to_owned()
         };
         let provided_args = instance.arg_tys(tcx);
-        let merged_arg_tys = Self::merge_args(inferred_args, provided_args);
+        let merged_arg_tys = ArgTys::merge(inferred_args, provided_args);
 
         if tcx.is_closure(instance.def_id()) {
-            let closure_ty = match substs[0].expect_ty().kind() {
-                ty::TyKind::Closure(def_id, ..) => tcx.type_of(def_id).subst_identity(),
-                _ => unreachable!(),
-            };
-            dbg!(closure_ty, &upvar_tracker);
-            let upvar_tracker = upvar_tracker.borrow();
-            match upvar_tracker.get(&closure_ty) {
+            let closure_info_storage = closure_info_storage.borrow();
+            match closure_info_storage.get(&instance.def_id()) {
                 Some(upvars) => Callee::new_closure(instance, merged_arg_tys, upvars.to_owned()),
-                None => Callee::new_function(instance, merged_arg_tys),
+                None => panic!(
+                    "did not find a closure {:?} inside closure storage",
+                    instance.def_id()
+                ),
             }
         } else {
             Callee::new_function(instance, merged_arg_tys)
@@ -128,8 +108,8 @@ impl<'tcx> Callee<'tcx> {
     pub fn resolve(
         def_id: DefId,
         substs: ty::SubstsRef<'tcx>,
-        arg_tys: &Vec<TrackedTy<'tcx>>,
-        upvar_tracker: UpvarTrackerRef<'tcx>,
+        arg_tys: &ArgTys<'tcx>,
+        upvar_tracker: ClosureInfoStorageRef<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> Vec<Callee<'tcx>> {
         // Resolve function instances that need to be analyzed.
@@ -169,7 +149,7 @@ impl<'tcx> Callee<'tcx> {
 
     fn find_plausible_instances(
         def_id: DefId,
-        arg_tys: &Vec<TrackedTy<'tcx>>,
+        arg_tys: &ArgTys<'tcx>,
         substs: ty::SubstsRef<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> Vec<(ty::Instance<'tcx>, ty::SubstsRef<'tcx>)> {
@@ -194,14 +174,14 @@ impl<'tcx> Callee<'tcx> {
     }
 
     fn find_plausible_substs_for(
-        concrete_tys: &Vec<TrackedTy<'tcx>>,
+        concrete_tys: &ArgTys<'tcx>,
         generic_tys: &Vec<Ty<'tcx>>,
         subst_index: u32,
     ) -> Vec<ty::GenericArg<'tcx>> {
         generic_tys
             .iter()
             // Iterate over generic and real type simultaneously.
-            .zip(concrete_tys.iter())
+            .zip(concrete_tys.as_vec().iter())
             .map(|(generic_ty, concrete_ty)| {
                 // Retrieve all possible substitutions.
                 let subst_tys = concrete_ty.into_vec();

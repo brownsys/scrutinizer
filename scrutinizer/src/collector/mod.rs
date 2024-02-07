@@ -1,3 +1,4 @@
+mod arg_tys;
 mod callee;
 mod dataflow_shim;
 mod fn_info;
@@ -11,9 +12,10 @@ mod tracked_ty;
 mod ty_ext;
 mod type_collector;
 mod type_tracker;
-mod upvar_tracker;
+mod closure_info;
 mod virtual_stack;
 
+pub use arg_tys::ArgTys;
 pub use callee::Callee;
 pub use fn_info::FnInfo;
 pub use storage::FnInfoStorage;
