@@ -5,7 +5,7 @@ pub trait TyExt<'tcx> {
 }
 
 impl<'tcx> TyExt<'tcx> for Ty<'tcx> {
-    // TODO: revisit this, I am not sure this is exhaustive.
+    // TODO: is there anyting else that we need to track?
     fn contains_erased(&self) -> bool {
         let contains_erased_type = self.walk().any(|ty| match ty.unpack() {
             ty::GenericArgKind::Type(ty) => match ty.kind() {

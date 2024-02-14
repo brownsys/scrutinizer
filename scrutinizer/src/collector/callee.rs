@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use log::trace;
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{self, TyCtxt};
 
 use super::arg_tys::ArgTys;
 use super::closure_info::{ClosureInfo, ClosureInfoStorageRef};
@@ -75,9 +75,8 @@ impl<'tcx> Callee<'tcx> {
         }
     }
 
-    fn assemble_callee(
+    fn assemble(
         instance: ty::Instance<'tcx>,
-        substs: ty::SubstsRef<'tcx>,
         arg_tys: &ArgTys<'tcx>,
         closure_info_storage: ClosureInfoStorageRef<'tcx>,
         tcx: TyCtxt<'tcx>,
@@ -92,7 +91,7 @@ impl<'tcx> Callee<'tcx> {
 
         if tcx.is_closure(instance.def_id()) {
             let closure_info_storage = closure_info_storage.borrow();
-            match closure_info_storage.get(&instance.def_id()) {
+            match closure_info_storage.all().get(&instance.def_id()) {
                 Some(upvars) => Callee::new_closure(instance, merged_arg_tys, upvars.to_owned()),
                 None => panic!(
                     "did not find a closure {:?} inside closure storage",
@@ -104,12 +103,50 @@ impl<'tcx> Callee<'tcx> {
         }
     }
 
+    fn find_plausible_instances(
+        def_id: DefId,
+        arg_tys: &ArgTys<'tcx>,
+        substs: ty::SubstsRef<'tcx>,
+        tcx: TyCtxt<'tcx>,
+    ) -> Vec<ty::Instance<'tcx>> {
+        let generic_tys = tcx
+            .fn_sig(def_id)
+            .subst_identity()
+            .inputs()
+            .skip_binder()
+            .to_vec();
+        // Generate all plausible substitutions for each generic.
+        (0..substs.len() as u32)
+            .map(|subst_index| {
+                let plausible_substs = arg_tys.extract_substs(&generic_tys, subst_index);
+                plausible_substs
+            })
+            // Explore all possible combinations.
+            .multi_cartesian_product()
+            // Filter valid substitutions.
+            .filter_map(|substs| Self::try_substitute_generics(def_id, substs, tcx))
+            .collect()
+    }
+
+    fn try_substitute_generics(
+        def_id: DefId,
+        substs: Vec<ty::GenericArg<'tcx>>,
+        tcx: TyCtxt<'tcx>,
+    ) -> Option<ty::Instance<'tcx>> {
+        // Check if every substitution is a type.
+        let new_substs: ty::SubstsRef = tcx.mk_substs(substs.as_slice());
+        let new_instance =
+            ty::Instance::resolve(tcx, ty::ParamEnv::reveal_all(), def_id, new_substs).unwrap();
+        new_instance
+    }
+
     // Try resolving partial function data to full function data.
     pub fn resolve(
+        &self,
         def_id: DefId,
         substs: ty::SubstsRef<'tcx>,
         arg_tys: &ArgTys<'tcx>,
-        upvar_tracker: ClosureInfoStorageRef<'tcx>,
+        closure_info_storage: ClosureInfoStorageRef<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> Vec<Callee<'tcx>> {
         // Resolve function instances that need to be analyzed.
@@ -122,11 +159,10 @@ impl<'tcx> Callee<'tcx> {
         };
 
         let fns = if tcx.is_mir_available(def_id) {
-            vec![Callee::assemble_callee(
+            vec![Callee::assemble(
                 maybe_instance.unwrap(),
-                substs,
                 &arg_tys,
-                upvar_tracker.clone(),
+                closure_info_storage.clone(),
                 tcx,
             )]
         } else {
@@ -138,82 +174,45 @@ impl<'tcx> Callee<'tcx> {
             );
             let assembled_callees = plausible_instances
                 .into_iter()
-                .map(|(instance, substs)| {
-                    Callee::assemble_callee(instance, substs, &arg_tys, upvar_tracker.clone(), tcx)
+                .map(|instance| {
+                    Callee::assemble(instance, &arg_tys, closure_info_storage.clone(), tcx)
                 })
                 .collect();
             assembled_callees
         };
-        fns
-    }
 
-    fn find_plausible_instances(
-        def_id: DefId,
-        arg_tys: &ArgTys<'tcx>,
-        substs: ty::SubstsRef<'tcx>,
-        tcx: TyCtxt<'tcx>,
-    ) -> Vec<(ty::Instance<'tcx>, ty::SubstsRef<'tcx>)> {
-        let generic_tys = tcx
-            .fn_sig(def_id)
-            .subst_identity()
-            .inputs()
-            .skip_binder()
-            .to_vec();
-        // Generate all plausible substitutions for each generic.
-        (0..substs.len())
-            .map(|subst_index| {
-                let plausible_substs =
-                    Self::find_plausible_substs_for(arg_tys, &generic_tys, subst_index as u32);
-                plausible_substs
+        fns.into_iter()
+            .map(|fn_data| {
+                if !tcx.is_closure(fn_data.instance().def_id()) {
+                    let resolved_instance = self.substitute(fn_data.instance().to_owned(), tcx);
+                    Callee::new_function(resolved_instance, fn_data.tracked_args().to_owned())
+                } else {
+                    match closure_info_storage
+                        .borrow()
+                        .get(&fn_data.instance().def_id())
+                    {
+                        Some(upvars) => {
+                            let resolved_instance = upvars.extract_instance(tcx);
+                            Callee::new_closure(
+                                resolved_instance,
+                                fn_data.tracked_args().to_owned(),
+                                fn_data.expect_closure_info().to_owned(),
+                            )
+                        }
+                        None => {
+                            panic!(
+                                "closure {:?} not inside the storage",
+                                fn_data.instance().def_id()
+                            );
+                        }
+                    }
+                }
             })
-            // Explore all possible combinations.
-            .multi_cartesian_product()
-            // Filter valid substitutions.
-            .filter_map(|substs| Self::try_substitute_generics(def_id, substs, tcx))
-            .collect()
+            .collect_vec()
     }
 
-    fn find_plausible_substs_for(
-        concrete_tys: &ArgTys<'tcx>,
-        generic_tys: &Vec<Ty<'tcx>>,
-        subst_index: u32,
-    ) -> Vec<ty::GenericArg<'tcx>> {
-        generic_tys
-            .iter()
-            // Iterate over generic and real type simultaneously.
-            .zip(concrete_tys.as_vec().iter())
-            .map(|(generic_ty, concrete_ty)| {
-                // Retrieve all possible substitutions.
-                let subst_tys = concrete_ty.into_vec();
-                let valid_substs = subst_tys
-                    .into_iter()
-                    .filter_map(|subst_ty| {
-                        // Peel both types simultaneously until type parameter appears.
-                        generic_ty
-                            .walk()
-                            .zip(subst_ty.walk())
-                            .find(|(generic_ty, _)| match generic_ty.unpack() {
-                                ty::GenericArgKind::Type(ty) => ty.is_param(subst_index),
-                                _ => false,
-                            })
-                            .and_then(|(_, subst_to)| Some(subst_to))
-                    })
-                    .collect_vec();
-                valid_substs
-            })
-            .flatten()
-            .collect()
-    }
-
-    fn try_substitute_generics(
-        def_id: DefId,
-        substs: Vec<ty::GenericArg<'tcx>>,
-        tcx: TyCtxt<'tcx>,
-    ) -> Option<(ty::Instance<'tcx>, ty::SubstsRef<'tcx>)> {
-        // Check if every substitution is a type.
-        let new_substs: ty::SubstsRef = tcx.mk_substs(substs.as_slice());
-        let new_instance =
-            ty::Instance::resolve(tcx, ty::ParamEnv::reveal_all(), def_id, new_substs).unwrap();
-        new_instance.and_then(|instance| Some((instance, new_substs)))
+    pub fn substitute<T: ty::TypeFoldable<TyCtxt<'tcx>>>(&self, t: T, tcx: TyCtxt<'tcx>) -> T {
+        self.instance()
+            .subst_mir_and_normalize_erasing_regions(tcx, ty::ParamEnv::reveal_all(), t)
     }
 }

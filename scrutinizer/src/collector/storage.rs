@@ -1,5 +1,7 @@
-use rustc_middle::mir::Terminator;
-use rustc_middle::ty;
+use rustc_middle::mir::{Body, Terminator};
+use rustc_middle::ty::{self, TyCtxt};
+use rustc_span::{def_id::DefId, Span};
+use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -17,6 +19,13 @@ pub struct FnInfoStorage<'tcx> {
     unhandled: Vec<Terminator<'tcx>>,
 }
 
+#[derive(Serialize)]
+pub struct FilteredCalls<'tcx> {
+    regular: Vec<FnInfo<'tcx>>,
+    externs: Vec<FnInfo<'tcx>>,
+    ambiguous: Vec<FnInfo<'tcx>>,
+}
+
 impl<'tcx> FnInfoStorage<'tcx> {
     pub fn new(origin: ty::Instance<'tcx>) -> FnInfoStorage<'tcx> {
         Self {
@@ -26,16 +35,63 @@ impl<'tcx> FnInfoStorage<'tcx> {
         }
     }
 
-    pub fn add_fn(&mut self, new_fn: FnInfo<'tcx>) {
-        self.fns.push(new_fn);
+    pub fn add_with_body(
+        &mut self,
+        parent: ty::Instance<'tcx>,
+        instance: ty::Instance<'tcx>,
+        places: HashMap<NormalizedPlace<'tcx>, TrackedTy<'tcx>>,
+        body: Body<'tcx>,
+        span: Span,
+    ) {
+        self.fns.push(FnInfo::Regular {
+            parent,
+            instance,
+            places,
+            body,
+            span,
+        });
+    }
+
+    pub fn add_without_body(
+        &mut self,
+        parent: ty::Instance<'tcx>,
+        def_id: DefId,
+        tracked_args: Vec<TrackedTy<'tcx>>,
+        tcx: TyCtxt<'tcx>,
+    ) {
+        if tcx.is_foreign_item(def_id) {
+            self.fns.push(FnInfo::Extern {
+                parent,
+                def_id,
+                tracked_args,
+            });
+        } else {
+            self.fns.push(FnInfo::Ambiguous {
+                parent,
+                def_id,
+                tracked_args,
+            });
+        };
     }
 
     pub fn add_unhandled(&mut self, new_unhandled: Terminator<'tcx>) {
         self.unhandled.push(new_unhandled);
     }
 
-    pub fn dump(&self) -> Vec<FnInfo<'tcx>> {
-        self.fns.to_owned()
+    pub fn dump(&self) -> FilteredCalls<'tcx> {
+        let mut calls = FilteredCalls {
+            regular: vec![],
+            externs: vec![],
+            ambiguous: vec![],
+        };
+        self.fns.iter().for_each(|call| {
+            match call {
+                FnInfo::Regular { .. } => calls.regular.push(call.to_owned()),
+                FnInfo::Extern { .. } => calls.externs.push(call.to_owned()),
+                FnInfo::Ambiguous { .. } => calls.ambiguous.push(call.to_owned()),
+            };
+        });
+        calls
     }
 
     pub fn get_regular(
@@ -62,5 +118,17 @@ impl<'tcx> FnInfoStorage<'tcx> {
                     unreachable!()
                 }
             })
+    }
+
+    pub fn origin(&self) -> &ty::Instance<'tcx> {
+        &self.origin
+    }
+
+    pub fn fns(&self) -> &Vec<FnInfo<'tcx>> {
+        &self.fns
+    }
+
+    pub fn unhandled(&self) -> &Vec<Terminator<'tcx>> {
+        &self.unhandled
     }
 }

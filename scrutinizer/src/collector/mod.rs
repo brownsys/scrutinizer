@@ -1,5 +1,6 @@
 mod arg_tys;
 mod callee;
+mod closure_info;
 mod dataflow_shim;
 mod fn_info;
 mod has_tracked_ty;
@@ -7,18 +8,18 @@ mod instance_ext;
 mod normalized_place;
 mod propagate;
 mod storage;
-mod substs_ext;
 mod tracked_ty;
 mod ty_ext;
 mod type_collector;
 mod type_tracker;
-mod closure_info;
 mod virtual_stack;
 
 pub use arg_tys::ArgTys;
 pub use callee::Callee;
+pub use closure_info::{ClosureInfoStorage, ClosureInfoStorageRef};
 pub use fn_info::FnInfo;
-pub use storage::FnInfoStorage;
+pub use storage::FilteredCalls;
+pub use storage::{FnInfoStorage, FnInfoStorageRef};
 pub use tracked_ty::TrackedTy;
 pub use type_collector::TypeCollector;
 pub use virtual_stack::VirtualStack;

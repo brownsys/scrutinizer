@@ -3,7 +3,7 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::mir::Terminator;
 use serde::ser::{Serialize, SerializeStruct};
 
-use super::fn_info::FnInfo;
+use crate::collector::{ClosureInfoStorage, FnInfo};
 
 pub struct PurityAnalysisResult<'tcx> {
     def_id: DefId,
@@ -12,6 +12,7 @@ pub struct PurityAnalysisResult<'tcx> {
     reason: String,
     passing: Vec<FnInfo<'tcx>>,
     failing: Vec<FnInfo<'tcx>>,
+    closures: ClosureInfoStorage<'tcx>,
     unhandled: Vec<Terminator<'tcx>>,
 }
 
@@ -29,6 +30,7 @@ impl<'tcx> Serialize for PurityAnalysisResult<'tcx> {
         }
         state.serialize_field("passing", &self.passing)?;
         state.serialize_field("failing", &self.failing)?;
+        state.serialize_field("closures", &self.closures)?;
         state.serialize_field(
             "unhandled",
             &self
@@ -49,6 +51,7 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
         reason: String,
         passing: Vec<FnInfo<'tcx>>,
         failing: Vec<FnInfo<'tcx>>,
+        closures: ClosureInfoStorage<'tcx>,
         unhandled: Vec<Terminator<'tcx>>,
     ) -> Self {
         Self {
@@ -58,6 +61,7 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
             reason,
             passing,
             failing,
+            closures,
             unhandled,
         }
     }

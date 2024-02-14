@@ -1,7 +1,7 @@
 #![feature(box_patterns)]
 #![feature(rustc_private)]
 
-// mod analyzer;
+mod analyzer;
 mod collector;
 mod util;
 // mod vartrack;
@@ -19,17 +19,20 @@ extern crate rustc_mir_dataflow;
 extern crate rustc_span;
 extern crate rustc_trait_selection;
 
+use analyzer::{produce_result, PurityAnalysisResult};
 use clap::Parser;
-use collector::{ArgTys, Callee, FnInfo, FnInfoStorage, TrackedTy, TypeCollector, VirtualStack};
+use collector::{
+    ArgTys, Callee, ClosureInfoStorage, FnInfoStorage, TrackedTy, TypeCollector, VirtualStack,
+};
 use itertools::Itertools;
 use log::{error, trace};
 use rustc_hir::{ItemId, ItemKind};
+use rustc_middle::mir::Mutability;
 use rustc_middle::ty;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::Write;
@@ -102,10 +105,11 @@ impl rustc_driver::Callbacks for ScrutinizerCallbacks {
 fn scrutinizer<'tcx>(
     tcx: ty::TyCtxt<'tcx>,
     args: &ScrutinizerPluginArgs,
-) -> Vec<Vec<FnInfo<'tcx>>> {
+) -> Vec<PurityAnalysisResult<'tcx>> {
     tcx.hir()
         .items()
-        .filter_map(|item_id| analyze_item(item_id, tcx.to_owned(), args))
+        .filter_map(|item_id| analyze_item(item_id, tcx, args))
+        .filter(|result| result.is_inconsistent())
         .collect()
 }
 
@@ -113,7 +117,7 @@ fn analyze_item<'tcx>(
     item_id: ItemId,
     tcx: ty::TyCtxt<'tcx>,
     args: &ScrutinizerPluginArgs,
-) -> Option<Vec<FnInfo<'tcx>>> {
+) -> Option<PurityAnalysisResult<'tcx>> {
     let hir = tcx.hir();
     let item = hir.item(item_id);
     let def_id = item.owner_id.to_def_id();
@@ -139,48 +143,50 @@ fn analyze_item<'tcx>(
                 })
                 .collect_vec();
 
-            // // Check for unresolved generic types or consts.
-            // let contains_unresolved_generics = arg_tys.iter().any(|arg| match arg {
-            //     TrackedTy::Present(..) => false,
-            //     TrackedTy::Erased(..) => true,
-            // });
+            // Check for unresolved generic types or consts.
+            let contains_unresolved_generics = arg_tys.iter().any(|arg| match arg {
+                TrackedTy::Present(..) => false,
+                TrackedTy::Erased(..) => true,
+            });
 
-            // if contains_unresolved_generics {
-            //     return Some(PurityAnalysisResult::new(
-            //         def_id,
-            //         annotated_pure,
-            //         false,
-            //         String::from("unresolved generics detected"),
-            //         vec![],
-            //         vec![],
-            //         vec![],
-            //     ));
-            // }
+            if contains_unresolved_generics {
+                return Some(PurityAnalysisResult::new(
+                    def_id,
+                    annotated_pure,
+                    false,
+                    String::from("unresolved generics detected"),
+                    vec![],
+                    vec![],
+                    ClosureInfoStorage::new(),
+                    vec![],
+                ));
+            }
 
-            // // Check for mutable arguments.
-            // let contains_mutable_args = arg_tys.iter().any(|arg| {
-            //     let main_ty = match arg {
-            //         TrackedTy::Present(ty) => ty,
-            //         TrackedTy::Erased(ty, ..) => ty,
-            //     };
-            //     if let ty::TyKind::Ref(.., mutbl) = main_ty.kind() {
-            //         return mutbl.to_owned() == Mutability::Mut;
-            //     } else {
-            //         return false;
-            //     }
-            // });
+            // Check for mutable arguments.
+            let contains_mutable_args = arg_tys.iter().any(|arg| {
+                let main_ty = match arg {
+                    TrackedTy::Present(ty) => ty,
+                    TrackedTy::Erased(..) => unreachable!(),
+                };
+                if let ty::TyKind::Ref(.., mutbl) = main_ty.kind() {
+                    return mutbl.to_owned() == Mutability::Mut;
+                } else {
+                    return false;
+                }
+            });
 
-            // if contains_mutable_args {
-            //     return Some(PurityAnalysisResult::new(
-            //         def_id,
-            //         annotated_pure,
-            //         false,
-            //         String::from("mutable arguments detected"),
-            //         vec![],
-            //         vec![],
-            //         vec![],
-            //     ));
-            // }
+            if contains_mutable_args {
+                return Some(PurityAnalysisResult::new(
+                    def_id,
+                    annotated_pure,
+                    false,
+                    String::from("mutable arguments detected"),
+                    vec![],
+                    vec![],
+                    ClosureInfoStorage::new(),
+                    vec![],
+                ));
+            }
 
             // Has generics.
             let has_generics = ty::InternalSubsts::identity_for_item(tcx, def_id)
@@ -206,7 +212,7 @@ fn analyze_item<'tcx>(
             trace!("current instance {:?}", &instance);
 
             let fn_storage = Rc::new(RefCell::new(FnInfoStorage::new(instance)));
-            let upvar_storage = Rc::new(RefCell::new(HashMap::new()));
+            let upvar_storage = Rc::new(RefCell::new(ClosureInfoStorage::new()));
             let virtual_stack = VirtualStack::new();
 
             let current_fn = Callee::new_function(instance, ArgTys::new(arg_tys));
@@ -215,20 +221,20 @@ fn analyze_item<'tcx>(
                 current_fn.clone(),
                 virtual_stack,
                 fn_storage.clone(),
-                upvar_storage,
+                upvar_storage.clone(),
                 tcx,
             )
             .run();
 
-            let fn_call_info = FnInfo::Regular {
-                parent: instance,
+            fn_storage.borrow_mut().add_with_body(
                 instance,
-                places: results.places,
-                span: body.span,
-            };
+                instance,
+                results.places().to_owned(),
+                body.to_owned(),
+                body.span,
+            );
 
-            fn_storage.borrow_mut().add_fn(fn_call_info);
-            let dump = fn_storage.borrow().dump();
+            let dump = produce_result(fn_storage, upvar_storage, annotated_pure, tcx);
             Some(dump)
         } else {
             None
