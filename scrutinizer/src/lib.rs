@@ -4,7 +4,7 @@
 mod analyzer;
 mod collector;
 mod util;
-// mod vartrack;
+mod vartrack;
 
 extern crate rustc_abi;
 extern crate rustc_borrowck;
@@ -19,24 +19,29 @@ extern crate rustc_mir_dataflow;
 extern crate rustc_span;
 extern crate rustc_trait_selection;
 
-use analyzer::{produce_result, PurityAnalysisResult};
+use analyzer::{produce_result, ImportantLocals, PurityAnalysisResult};
 use clap::Parser;
 use collector::{
     ArgTys, Callee, ClosureInfoStorage, FnInfoStorage, TrackedTy, TypeCollector, VirtualStack,
 };
+use flowistry::indexed::impls::LocationOrArg;
+use flowistry::infoflow::Direction;
 use itertools::Itertools;
 use log::{error, trace};
 use rustc_hir::{ItemId, ItemKind};
-use rustc_middle::mir::Mutability;
+use rustc_middle::mir::{Local, Mutability, Place};
 use rustc_middle::ty;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
+use rustc_utils::PlaceExt;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::env;
 use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
+use vartrack::compute_dependent_locals;
 
 pub struct ScrutinizerPlugin;
 
@@ -131,7 +136,7 @@ fn analyze_item<'tcx>(
     if args.function.as_str().is_empty()
         || item.ident.name == rustc_span::symbol::Symbol::intern(args.function.as_str())
     {
-        if let ItemKind::Fn(..) = &item.kind {
+        if let ItemKind::Fn(fn_sig, ..) = &item.kind {
             // Retrieve body.
             let body = tcx.optimized_mir(def_id);
 
@@ -230,11 +235,41 @@ fn analyze_item<'tcx>(
                 instance,
                 instance,
                 results.places().to_owned(),
+                results.calls().to_owned(),
                 body.to_owned(),
                 body.span,
             );
 
-            let dump = produce_result(fn_storage, upvar_storage, annotated_pure, tcx);
+            // Calculate important locals.
+            let important_locals = {
+                // Parse important arguments.
+                let important_args = if args.important_args.is_empty() {
+                    // If no important arguments are provided, assume all are important.
+                    let n_args = fn_sig.decl.inputs.len();
+                    (1..=n_args).collect()
+                } else {
+                    args.important_args.clone()
+                };
+                let targets = vec![important_args
+                    .iter()
+                    .map(|arg| {
+                        let arg_local = Local::from_usize(*arg);
+                        let arg_place = Place::make(arg_local, &[], tcx);
+                        return (arg_place, LocationOrArg::Arg(arg_local));
+                    })
+                    .collect_vec()];
+                ImportantLocals::new(HashSet::from_iter(
+                    compute_dependent_locals(tcx, def_id, targets, Direction::Forward).into_iter(),
+                ))
+            };
+
+            let dump = produce_result(
+                fn_storage,
+                upvar_storage,
+                important_locals,
+                annotated_pure,
+                tcx,
+            );
             Some(dump)
         } else {
             None

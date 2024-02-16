@@ -3,12 +3,13 @@ use rustc_middle::ty::{self, TyCtxt};
 use rustc_span::{def_id::DefId, Span};
 use serde::Serialize;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use super::fn_info::FnInfo;
 use super::normalized_place::NormalizedPlace;
 use super::tracked_ty::TrackedTy;
+use super::type_tracker::Call;
 
 pub type FnInfoStorageRef<'tcx> = Rc<RefCell<FnInfoStorage<'tcx>>>;
 
@@ -40,16 +41,21 @@ impl<'tcx> FnInfoStorage<'tcx> {
         parent: ty::Instance<'tcx>,
         instance: ty::Instance<'tcx>,
         places: HashMap<NormalizedPlace<'tcx>, TrackedTy<'tcx>>,
+        calls: HashSet<Call<'tcx>>,
         body: Body<'tcx>,
         span: Span,
     ) {
-        self.fns.push(FnInfo::Regular {
+        let fn_info = FnInfo::Regular {
             parent,
             instance,
             places,
+            calls,
             body,
             span,
-        });
+        };
+        if !self.fns.contains(&fn_info) {
+            self.fns.push(fn_info);
+        }
     }
 
     pub fn add_without_body(
@@ -59,19 +65,22 @@ impl<'tcx> FnInfoStorage<'tcx> {
         tracked_args: Vec<TrackedTy<'tcx>>,
         tcx: TyCtxt<'tcx>,
     ) {
-        if tcx.is_foreign_item(def_id) {
-            self.fns.push(FnInfo::Extern {
+        let fn_info = if tcx.is_foreign_item(def_id) {
+            FnInfo::Extern {
                 parent,
                 def_id,
                 tracked_args,
-            });
+            }
         } else {
-            self.fns.push(FnInfo::Ambiguous {
+            FnInfo::Ambiguous {
                 parent,
                 def_id,
                 tracked_args,
-            });
+            }
         };
+        if !self.fns.contains(&fn_info) {
+            self.fns.push(fn_info);
+        }
     }
 
     pub fn add_unhandled(&mut self, new_unhandled: Terminator<'tcx>) {

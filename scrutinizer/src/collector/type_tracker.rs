@@ -1,11 +1,13 @@
 use itertools::Itertools;
 use rustc_abi::FieldIdx;
-use rustc_middle::mir::{tcx::PlaceTy, Body, Local, Place, PlaceElem};
+use rustc_middle::mir::{tcx::PlaceTy, Body, Local, Operand, Place, PlaceElem};
 use rustc_middle::ty::TyCtxt;
 use rustc_mir_dataflow::{fmt::DebugWithContext, JoinSemiLattice};
 use rustc_span::def_id::DefId;
 use rustc_utils::PlaceExt;
-use std::collections::HashMap;
+use serde::ser::SerializeStruct;
+use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 
 use super::arg_tys::ArgTys;
 use super::closure_info::ClosureInfo;
@@ -14,14 +16,71 @@ use super::propagate::apply_fresh_projection;
 use super::tracked_ty::TrackedTy;
 use super::type_collector::TypeCollector;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash)]
+pub struct Call<'tcx> {
+    def_id: DefId,
+    args: Vec<Operand<'tcx>>,
+}
+
+impl<'tcx> PartialEq for Call<'tcx> {
+    fn eq(&self, other: &Self) -> bool {
+        self.def_id == other.def_id && self.args == other.args
+    }
+}
+
+impl<'tcx> Eq for Call<'tcx> {}
+
+impl<'tcx> Call<'tcx> {
+    pub fn new(def_id: DefId, args: Vec<Operand<'tcx>>) -> Self {
+        Self { def_id, args }
+    }
+    pub fn args(&self) -> &Vec<Operand<'tcx>> {
+        &self.args
+    }
+    pub fn def_id(&self) -> &DefId {
+        &self.def_id
+    }
+}
+
+impl<'tcx> Serialize for Call<'tcx> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("Call", 2)?;
+        state.serialize_field("def_id", format!("{:?}", self.def_id).as_str())?;
+        state.serialize_field(
+            "args",
+            &self
+                .args
+                .iter()
+                .map(|arg| format!("{:?}", arg))
+                .collect_vec(),
+        )?;
+        state.end()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct TypeTracker<'tcx> {
     places: HashMap<NormalizedPlace<'tcx>, TrackedTy<'tcx>>,
+    calls: HashSet<Call<'tcx>>,
 }
+
+impl<'tcx> PartialEq for TypeTracker<'tcx> {
+    fn eq(&self, other: &Self) -> bool {
+        self.places == other.places
+    }
+}
+
+impl<'tcx> Eq for TypeTracker<'tcx> {}
 
 impl<'tcx> TypeTracker<'tcx> {
     pub fn new(places: HashMap<NormalizedPlace<'tcx>, TrackedTy<'tcx>>) -> Self {
-        TypeTracker { places }
+        TypeTracker {
+            places,
+            calls: HashSet::new(),
+        }
     }
 
     pub fn get(&self, place: &NormalizedPlace<'tcx>) -> Option<&TrackedTy<'tcx>> {
@@ -161,6 +220,14 @@ impl<'tcx> TypeTracker<'tcx> {
             TrackedTy::Erased(..) => inferred_return_ty,
         }
     }
+
+    pub fn add_call(&mut self, call: Call<'tcx>) {
+        self.calls.insert(call);
+    }
+
+    pub fn calls(&self) -> &HashSet<Call<'tcx>> {
+        &self.calls
+    }
 }
 
 impl<'tcx> DebugWithContext<TypeCollector<'tcx>> for TypeTracker<'tcx> {}
@@ -172,6 +239,10 @@ impl<'tcx> JoinSemiLattice for TypeTracker<'tcx> {
             let updated = self_value.join(other_value);
             acc || updated
         });
-        updated_places
+        let updated_calls = other.calls.iter().fold(false, |updated, call_other| {
+            let inserted = self.calls.insert(call_other.to_owned());
+            inserted || updated
+        });
+        updated_places || updated_calls
     }
 }

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 
+use super::arg_tys::ArgTys;
 use super::callee::Callee;
 use super::closure_info::ClosureInfoStorageRef;
 use super::dataflow_shim::iterate_to_fixpoint;
@@ -16,9 +17,8 @@ use super::has_tracked_ty::HasTrackedTy;
 use super::normalized_place::NormalizedPlace;
 use super::storage::FnInfoStorageRef;
 use super::tracked_ty::TrackedTy;
-use super::type_tracker::TypeTracker;
+use super::type_tracker::{Call, TypeTracker};
 use super::virtual_stack::{VirtualStack, VirtualStackItem};
-use super::ArgTys;
 
 #[derive(Clone)]
 pub struct TypeCollector<'tcx> {
@@ -221,6 +221,8 @@ impl<'tcx> Analysis<'tcx> for TypeCollector<'tcx> {
                             continue;
                         };
 
+                        state.add_call(Call::new(def_id, args.to_owned()));
+
                         let return_ty = if self.tcx.is_mir_available(def_id) {
                             let body = fn_data
                                 .substitute(self.tcx.optimized_mir(def_id).to_owned(), self.tcx);
@@ -239,6 +241,7 @@ impl<'tcx> Analysis<'tcx> for TypeCollector<'tcx> {
                                 self.current_fn.instance().to_owned(),
                                 fn_data.instance().to_owned(),
                                 results.places().to_owned(),
+                                results.calls().to_owned(),
                                 body.to_owned(),
                                 body.span,
                             );
@@ -283,6 +286,7 @@ impl<'tcx> Analysis<'tcx> for TypeCollector<'tcx> {
                         );
                     }
                 } else {
+                    state.add_call(Call::new(def_id.to_owned(), args.to_owned()));
                     self.fn_storage_ref.borrow_mut().add_without_body(
                         self.current_fn.instance().to_owned(),
                         def_id.to_owned(),
