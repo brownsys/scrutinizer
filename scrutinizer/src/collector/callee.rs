@@ -2,10 +2,11 @@ use itertools::Itertools;
 use log::trace;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{self, TyCtxt};
+use rustc_utils::BodyExt;
 
 use super::arg_tys::ArgTys;
 use super::closure_info::{ClosureInfo, ClosureInfoStorageRef};
-use super::instance_ext::InstanceExt;
+use super::has_arg_tys::HasArgTys;
 
 #[derive(Clone, Debug)]
 pub enum Callee<'tcx> {
@@ -25,13 +26,6 @@ impl<'tcx> Callee<'tcx> {
         Self::Function {
             instance,
             tracked_args,
-        }
-    }
-
-    pub fn is_function(&self) -> bool {
-        match self {
-            Callee::Function { .. } => true,
-            _ => false,
         }
     }
 
@@ -71,7 +65,7 @@ impl<'tcx> Callee<'tcx> {
     pub fn expect_closure_info(&self) -> &ClosureInfo<'tcx> {
         match self {
             Callee::Closure { closure_info, .. } => closure_info,
-            _ => panic!("no upvars associated with function {:?}", self),
+            _ => panic!("expect_closure_info called on {:?}", self),
         }
     }
 
@@ -88,11 +82,17 @@ impl<'tcx> Callee<'tcx> {
         };
         let provided_args = instance.arg_tys(tcx);
         let merged_arg_tys = ArgTys::merge(inferred_args, provided_args);
-
+        if let ty::InstanceDef::ClosureOnceShim { .. } = instance.def {
+            std::fs::write(
+                "once.rs",
+                tcx.instance_mir(instance.def).to_string(tcx).unwrap(),
+            ).unwrap();
+        }
         if tcx.is_closure(instance.def_id()) {
-            let closure_info_storage = closure_info_storage.borrow();
-            match closure_info_storage.all().get(&instance.def_id()) {
-                Some(upvars) => Callee::new_closure(instance, merged_arg_tys, upvars.to_owned()),
+            match closure_info_storage.borrow().get(&instance.def_id()) {
+                Some(closure_info) => {
+                    Callee::new_closure(instance, merged_arg_tys, closure_info.to_owned())
+                }
                 None => panic!(
                     "did not find a closure {:?} inside closure storage",
                     instance.def_id()

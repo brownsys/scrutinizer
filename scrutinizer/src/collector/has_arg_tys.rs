@@ -4,11 +4,11 @@ use std::iter::once;
 use super::arg_tys::ArgTys;
 use super::tracked_ty::TrackedTy;
 
-pub trait InstanceExt<'tcx> {
+pub trait HasArgTys<'tcx> {
     fn arg_tys(&self, tcx: TyCtxt<'tcx>) -> ArgTys<'tcx>;
 }
 
-impl<'tcx> InstanceExt<'tcx> for ty::Instance<'tcx> {
+impl<'tcx> HasArgTys<'tcx> for ty::Instance<'tcx> {
     fn arg_tys(&self, tcx: TyCtxt<'tcx>) -> ArgTys<'tcx> {
         let ty = self.ty(tcx, ty::ParamEnv::reveal_all());
         match ty.kind() {

@@ -15,9 +15,21 @@ pub fn lambda_uncalled(a: usize) -> usize {
     a
 }
 
-// This works fine even with FnOnce or FnMut.
+#[inline(never)]
 #[doc = "impure"]
-pub fn execute<F: FnOnce(usize) -> usize>(x: usize, l: F) -> usize {
+pub fn execute_once<F: FnOnce(usize) -> usize>(x: usize, l: F) -> usize {
+    l(x)
+}
+
+#[inline(never)]
+#[doc = "impure"]
+pub fn execute_mut<F: FnMut(usize) -> usize>(x: usize, mut l: F) -> usize {
+    l(x)
+}
+
+#[inline(never)]
+#[doc = "impure"]
+pub fn execute<F: Fn(usize) -> usize>(x: usize, l: F) -> usize {
     l(x)
 }
 
@@ -33,22 +45,17 @@ pub fn closure_test(a: usize) {
         return x * x;
     };
 
-    let lambda_ref = |x: &usize| -> bool {
-        return *x > 0;
-    };
-
-    let y = 42;
+    let capture_param = 42;
     let closure_capture = |x: usize| -> usize {
-        return x * y;
+        return x * capture_param;
     };
 
-    let y = 42;
+    let capture_move_param = 42;
     let closure_capture_move = move |x: usize| -> usize {
-        return x * y;
+        return x * capture_move_param;
     };
 
-    let y = 42;
-    let ambiguous_lambda = if y > 5 {
+    let ambiguous_lambda = if a > 5 {
         |x: usize| -> usize {
             return x;
         }
@@ -57,13 +64,23 @@ pub fn closure_test(a: usize) {
             return x * x;
         }
     };
+    
+    execute_once(a, lambda);
+    execute_once(a, closure_capture);
+    execute_once(a, closure_capture_move);
+    execute_once(a, ambiguous_lambda);
 
-    // execute(a, lambda);
-    // execute_destruct(a, lambda_ref);
+    execute_mut(a, lambda);
+    execute_mut(a, closure_capture);
+    execute_mut(a, closure_capture_move);
+    execute_mut(a, ambiguous_lambda);
+
+    execute(a, lambda);
+    execute(a, closure_capture);
+    execute(a, closure_capture_move);
+    execute(a, ambiguous_lambda);
+
     execute_dyn(a, &lambda);
-    // execute(a, closure_capture);
-    // execute(a, closure_capture_move);
-    // execute(a, ambiguous_lambda);
 }
 
 #[doc = "impure"]

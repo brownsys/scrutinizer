@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use super::arg_tys::ArgTys;
 use super::closure_info::ClosureInfo;
 use super::normalized_place::NormalizedPlace;
-use super::propagate::apply_fresh_projection;
+use super::project_fresh::project_fresh;
 use super::tracked_ty::TrackedTy;
 use super::type_collector::TypeCollector;
 
@@ -171,7 +171,7 @@ impl<'tcx> TypeTracker<'tcx> {
                     projection_tail
                         .iter()
                         .fold(initial_place, |place_ty, projection_elem| {
-                            apply_fresh_projection(&place_ty, projection_elem, tcx)
+                            project_fresh(&place_ty, projection_elem, tcx)
                         })
                         .ty
                 });

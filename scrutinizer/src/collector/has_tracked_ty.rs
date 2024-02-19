@@ -26,14 +26,13 @@ impl<'tcx> HasTrackedTy<'tcx> for Place<'tcx> {
         instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> TrackedTy<'tcx> {
-        let def_id = instance.def_id();
         let body = instance.subst_mir_and_normalize_erasing_regions(
             tcx,
             ty::ParamEnv::reveal_all(),
-            tcx.optimized_mir(def_id).to_owned(),
+            tcx.instance_mir(instance.def).to_owned(),
         );
         type_tracker
-            .get(&NormalizedPlace::from_place(self, tcx, def_id))
+            .get(&NormalizedPlace::from_place(self, tcx, instance.def_id()))
             .and_then(|ty| Some(ty.to_owned()))
             .unwrap_or(TrackedTy::from_ty(self.ty(&body, tcx).ty).to_owned())
     }
@@ -117,25 +116,6 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
             }
             Rvalue::ThreadLocalRef(did) => {
                 let ty = tcx.thread_local_ptr_ty(did);
-                // if ty.is_closure() {
-                //     let closure_def_id = if let ty::TyKind::Closure(def_id, ..) = ty.kind() {
-                //         def_id.to_owned()
-                //     } else {
-                //         unreachable!();
-                //     };
-                //     let resolved_closure_ty = instance.subst_mir_and_normalize_erasing_regions(
-                //         tcx,
-                //         ty::ParamEnv::reveal_all(),
-                //         ty,
-                //     );
-                //     closure_info_storage.borrow_mut().insert(
-                //         closure_def_id,
-                //         ClosureInfo {
-                //             upvars: vec![],
-                //             with_substs: resolved_closure_ty,
-                //         },
-                //     );
-                // };
                 TrackedTy::from_ty(ty)
             }
             Rvalue::Ref(reg, bk, ref place) => {
@@ -162,7 +142,6 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                 })
             }
             Rvalue::Len(..) => TrackedTy::from_ty(tcx.types.usize),
-            // TODO: this is a potential point of failure, as not all cast kinds are covered.
             Rvalue::Cast(cast_kind, ref operand, ref ty) => {
                 let tracked_ty =
                     operand.tracked_ty(type_tracker, closure_info_storage.clone(), instance, tcx);
@@ -209,87 +188,74 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
             Rvalue::NullaryOp(NullOp::SizeOf | NullOp::AlignOf, _) => {
                 TrackedTy::from_ty(tcx.types.usize)
             }
-            Rvalue::Aggregate(ref ak, ref ops) => {
-                match **ak {
-                    AggregateKind::Array(ty) => {
-                        TrackedTy::from_ty(tcx.mk_array(ty, ops.len() as u64))
-                    }
-                    AggregateKind::Tuple => {
-                        let op_tys = ops
-                            .iter()
-                            .map(|op| {
-                                op.tracked_ty(
-                                    type_tracker,
-                                    closure_info_storage.clone(),
-                                    instance,
-                                    tcx,
-                                )
-                            })
-                            .collect_vec();
-                        let all_present = op_tys.iter().all(|ty| {
-                            if let TrackedTy::Present(..) = ty {
-                                true
-                            } else {
-                                false
-                            }
-                        });
-                        let transformed_ty = if all_present {
-                            let ops = op_tys.iter().map(|ty| match ty {
-                                TrackedTy::Present(ty) => ty.to_owned(),
-                                _ => unreachable!(),
-                            });
-                            TrackedTy::from_ty(tcx.mk_tup_from_iter(ops))
+            Rvalue::Aggregate(ref ak, ref ops) => match **ak {
+                AggregateKind::Array(ty) => TrackedTy::from_ty(tcx.mk_array(ty, ops.len() as u64)),
+                AggregateKind::Tuple => {
+                    let op_tys = ops
+                        .iter()
+                        .map(|op| {
+                            op.tracked_ty(type_tracker, closure_info_storage.clone(), instance, tcx)
+                        })
+                        .collect_vec();
+                    let all_present = op_tys.iter().all(|ty| {
+                        if let TrackedTy::Present(..) = ty {
+                            true
                         } else {
-                            let deps = HashSet::from_iter(
-                                op_tys
-                                    .iter()
-                                    .map(|ty| match ty {
-                                        TrackedTy::Present(ty) => vec![ty.to_owned()],
-                                        TrackedTy::Erased(.., deps) => {
-                                            deps.iter().cloned().collect_vec()
-                                        }
-                                    })
-                                    .multi_cartesian_product()
-                                    .map(|tuple| tcx.mk_tup_from_iter(tuple.into_iter())),
-                            );
-                            TrackedTy::Erased(deps)
-                        };
-                        transformed_ty
-                    }
-                    // TODO: this could implicitly drop dependency information,
-                    //       as it does not consider which operands flow into it.
-                    AggregateKind::Adt(did, _, substs, _, _) => {
-                        TrackedTy::from_ty(instance.subst_mir_and_normalize_erasing_regions(
-                            tcx,
-                            ty::ParamEnv::reveal_all(),
-                            tcx.type_of(did).subst(tcx, substs),
-                        ))
-                    }
-                    AggregateKind::Closure(did, substs) => {
-                        let closure_ty = tcx.mk_closure(did, substs);
-                        let upvar_tys = ops
-                            .into_iter()
-                            .map(|operand| {
-                                operand.tracked_ty(
-                                    type_tracker,
-                                    closure_info_storage.clone(),
-                                    instance,
-                                    tcx,
-                                )
-                            })
-                            .collect_vec();
-                        closure_info_storage
-                            .borrow_mut()
-                            .try_insert(closure_ty, instance, upvar_tys, tcx);
-                        TrackedTy::from_ty(closure_ty)
-                    }
-                    AggregateKind::Generator(..) => {
-                        panic!("generators are not supported")
-                    }
+                            false
+                        }
+                    });
+                    let transformed_ty = if all_present {
+                        let ops = op_tys.iter().map(|ty| match ty {
+                            TrackedTy::Present(ty) => ty.to_owned(),
+                            _ => unreachable!(),
+                        });
+                        TrackedTy::from_ty(tcx.mk_tup_from_iter(ops))
+                    } else {
+                        let deps = HashSet::from_iter(
+                            op_tys
+                                .iter()
+                                .map(|ty| match ty {
+                                    TrackedTy::Present(ty) => vec![ty.to_owned()],
+                                    TrackedTy::Erased(.., deps) => {
+                                        deps.iter().cloned().collect_vec()
+                                    }
+                                })
+                                .multi_cartesian_product()
+                                .map(|tuple| tcx.mk_tup_from_iter(tuple.into_iter())),
+                        );
+                        TrackedTy::Erased(deps)
+                    };
+                    transformed_ty
                 }
-            }
-            // TODO: this could implicitly drop dependency information,
-            //       as it does not consider which operands flow into it.
+                AggregateKind::Adt(did, _, substs, _, _) => {
+                    TrackedTy::from_ty(instance.subst_mir_and_normalize_erasing_regions(
+                        tcx,
+                        ty::ParamEnv::reveal_all(),
+                        tcx.type_of(did).subst(tcx, substs),
+                    ))
+                }
+                AggregateKind::Closure(did, substs) => {
+                    let closure_ty = tcx.mk_closure(did, substs);
+                    let upvar_tys = ops
+                        .into_iter()
+                        .map(|operand| {
+                            operand.tracked_ty(
+                                type_tracker,
+                                closure_info_storage.clone(),
+                                instance,
+                                tcx,
+                            )
+                        })
+                        .collect_vec();
+                    closure_info_storage
+                        .borrow_mut()
+                        .try_resolve_and_insert(closure_ty, instance, upvar_tys, tcx);
+                    TrackedTy::from_ty(closure_ty)
+                }
+                AggregateKind::Generator(..) => {
+                    panic!("generators are not supported")
+                }
+            },
             Rvalue::ShallowInitBox(_, ty) => TrackedTy::from_ty(tcx.mk_box(ty)),
             Rvalue::CopyForDeref(ref place) => {
                 place.tracked_ty(type_tracker, closure_info_storage.clone(), instance, tcx)

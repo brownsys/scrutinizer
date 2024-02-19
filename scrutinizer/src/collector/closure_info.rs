@@ -26,11 +26,17 @@ impl<'tcx> Serialize for ClosureInfoStorage<'tcx> {
 }
 
 impl<'tcx> ClosureInfoStorage<'tcx> {
-    pub fn all(&self) -> &HashMap<DefId, ClosureInfo<'tcx>> {
-        &self.closures
+    pub fn new() -> Self {
+        Self {
+            closures: HashMap::new(),
+        }
     }
 
-    pub fn try_insert(
+    pub fn get(&self, def_id: &DefId) -> Option<&ClosureInfo<'tcx>> {
+        self.closures.get(&def_id)
+    }
+
+    pub fn try_resolve_and_insert(
         &mut self,
         ty: Ty<'tcx>,
         instance: &ty::Instance<'tcx>,
@@ -62,16 +68,6 @@ impl<'tcx> ClosureInfoStorage<'tcx> {
                     with_substs: resolved_closure_ty,
                 });
         }
-    }
-
-    pub fn new() -> Self {
-        Self {
-            closures: HashMap::new(),
-        }
-    }
-
-    pub fn get(&self, def_id: &DefId) -> Option<&ClosureInfo<'tcx>> {
-        self.closures.get(&def_id)
     }
 }
 

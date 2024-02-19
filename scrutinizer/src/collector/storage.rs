@@ -1,5 +1,5 @@
-use rustc_middle::mir::{Body, Terminator};
-use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::mir::Body;
+use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::{def_id::DefId, Span};
 use serde::Serialize;
 use std::cell::RefCell;
@@ -17,7 +17,7 @@ pub type FnInfoStorageRef<'tcx> = Rc<RefCell<FnInfoStorage<'tcx>>>;
 pub struct FnInfoStorage<'tcx> {
     origin: ty::Instance<'tcx>,
     fns: Vec<FnInfo<'tcx>>,
-    unhandled: Vec<Terminator<'tcx>>,
+    unhandled: Vec<Ty<'tcx>>,
 }
 
 #[derive(Serialize)]
@@ -83,24 +83,8 @@ impl<'tcx> FnInfoStorage<'tcx> {
         }
     }
 
-    pub fn add_unhandled(&mut self, new_unhandled: Terminator<'tcx>) {
+    pub fn add_unhandled(&mut self, new_unhandled: Ty<'tcx>) {
         self.unhandled.push(new_unhandled);
-    }
-
-    pub fn dump(&self) -> FilteredCalls<'tcx> {
-        let mut calls = FilteredCalls {
-            regular: vec![],
-            externs: vec![],
-            ambiguous: vec![],
-        };
-        self.fns.iter().for_each(|call| {
-            match call {
-                FnInfo::Regular { .. } => calls.regular.push(call.to_owned()),
-                FnInfo::Extern { .. } => calls.externs.push(call.to_owned()),
-                FnInfo::Ambiguous { .. } => calls.ambiguous.push(call.to_owned()),
-            };
-        });
-        calls
     }
 
     pub fn get_regular(
@@ -137,7 +121,7 @@ impl<'tcx> FnInfoStorage<'tcx> {
         &self.fns
     }
 
-    pub fn unhandled(&self) -> &Vec<Terminator<'tcx>> {
+    pub fn unhandled(&self) -> &Vec<Ty<'tcx>> {
         &self.unhandled
     }
 }

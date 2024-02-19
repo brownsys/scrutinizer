@@ -114,7 +114,7 @@ impl<'tcx> Serialize for FnInfo<'tcx> {
             FnInfo::Regular {
                 ref parent,
                 ref instance,
-                ref places,
+                // ref places,
                 ref calls,
                 ref span,
                 ..

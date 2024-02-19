@@ -54,6 +54,8 @@ pub struct ScrutinizerPluginArgs {
     important_args: Vec<usize>,
     #[arg(short, long, default_value("analysis_results.json"))]
     out_file: String,
+    #[arg(short, long)]
+    only_inconsistent: bool,
 }
 
 impl RustcPlugin for ScrutinizerPlugin {
@@ -114,7 +116,13 @@ fn scrutinizer<'tcx>(
     tcx.hir()
         .items()
         .filter_map(|item_id| analyze_item(item_id, tcx, args))
-        .filter(|result| result.is_inconsistent())
+        .filter(|result| {
+            if args.only_inconsistent {
+                result.is_inconsistent()
+            } else {
+                true
+            }
+        })
         .collect()
 }
 

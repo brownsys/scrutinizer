@@ -6,11 +6,11 @@ use rustc_middle::ty::{self, TyCtxt};
 use rustc_mir_dataflow::{Analysis, AnalysisDomain, CallReturnPlaces, JoinSemiLattice};
 use rustc_utils::BodyExt;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::Write;
+use std::fs;
 
 use super::arg_tys::ArgTys;
 use super::callee::Callee;
+use super::closure_collector::CollectClosures;
 use super::closure_info::ClosureInfoStorageRef;
 use super::dataflow_shim::iterate_to_fixpoint;
 use super::has_tracked_ty::HasTrackedTy;
@@ -43,7 +43,7 @@ impl<'tcx> TypeCollector<'tcx> {
             .subst_mir_and_normalize_erasing_regions(
                 tcx,
                 ty::ParamEnv::reveal_all(),
-                tcx.optimized_mir(current_fn.instance().def_id()).to_owned(),
+                tcx.instance_mir(current_fn.instance().def).to_owned(),
             );
         TypeCollector {
             current_fn,
@@ -70,18 +70,11 @@ impl<'tcx> TypeCollector<'tcx> {
             return TypeTracker::new(places);
         }
 
-        File::create(format!(
-            "mir_dumps/{:?}.rs",
-            self.current_fn.instance().def_id()
-        ))
-        .and_then(|mut file| {
-            file.write_all(
-                self.substituted_body
-                    .to_string(self.tcx)
-                    .unwrap()
-                    .as_bytes(),
-            )
-        })
+        fs::create_dir_all("mir_dumps").unwrap();
+        fs::write(
+            format!("mir_dumps/{:?}.rs", self.current_fn.instance().def_id()),
+            self.substituted_body.to_string(self.tcx).unwrap(),
+        )
         .unwrap();
 
         let mut cursor =
@@ -116,14 +109,10 @@ impl<'tcx> AnalysisDomain<'tcx> for TypeCollector<'tcx> {
         let tracked_types = HashMap::from_iter(all_places.map(|place| {
             let place = NormalizedPlace::from_place(&place, self.tcx, def_id);
             let place_ty = place.ty(body, self.tcx).ty;
-            self.closure_storage_ref.borrow_mut().try_insert(
-                place_ty,
-                self.current_fn.instance(),
-                vec![],
-                self.tcx,
-            );
             (place, TrackedTy::from_ty(place_ty))
         }));
+
+        body.collect_closures(self.tcx, self.closure_storage_ref.clone(), &self.current_fn);
 
         let mut type_tracker = TypeTracker::new(tracked_types);
 
@@ -146,8 +135,7 @@ impl<'tcx> Analysis<'tcx> for TypeCollector<'tcx> {
         statement: &Statement<'tcx>,
         _location: Location,
     ) {
-        let statement_owned = statement.to_owned();
-        if let StatementKind::Assign(box (place, rvalue)) = statement_owned.kind {
+        if let StatementKind::Assign(box (place, rvalue)) = statement.to_owned().kind {
             let rvalue_tracked_ty = rvalue.tracked_ty(
                 state,
                 self.closure_storage_ref.clone(),
@@ -223,44 +211,49 @@ impl<'tcx> Analysis<'tcx> for TypeCollector<'tcx> {
 
                         state.add_call(Call::new(def_id, args.to_owned()));
 
-                        let return_ty = if self.tcx.is_mir_available(def_id) {
-                            let body = fn_data
-                                .substitute(self.tcx.optimized_mir(def_id).to_owned(), self.tcx);
+                        let return_ty: TrackedTy<'_> = match fn_data.instance().def {
+                            ty::InstanceDef::Intrinsic(..) | ty::InstanceDef::Virtual(..) => {
+                                self.fn_storage_ref.borrow_mut().add_without_body(
+                                    self.current_fn.instance().to_owned(),
+                                    def_id.to_owned(),
+                                    arg_tys.as_vec().to_owned(),
+                                    self.tcx,
+                                );
+                                TrackedTy::from_ty(
+                                    self.tcx
+                                        .fn_sig(def_id)
+                                        .subst(self.tcx, fn_data.instance().substs)
+                                        .output()
+                                        .skip_binder(),
+                                )
+                            }
+                            _ => {
+                                let body = fn_data.substitute(
+                                    self.tcx.instance_mir(fn_data.instance().def).to_owned(),
+                                    self.tcx,
+                                );
 
-                            // Swap the current instance and continue recursively.
-                            let results = TypeCollector::new(
-                                fn_data.clone(),
-                                self.virtual_stack.clone(),
-                                self.fn_storage_ref.clone(),
-                                self.closure_storage_ref.clone(),
-                                self.tcx,
-                            )
-                            .run();
+                                // Swap the current instance and continue recursively.
+                                let results = TypeCollector::new(
+                                    fn_data.clone(),
+                                    self.virtual_stack.clone(),
+                                    self.fn_storage_ref.clone(),
+                                    self.closure_storage_ref.clone(),
+                                    self.tcx,
+                                )
+                                .run();
 
-                            self.fn_storage_ref.borrow_mut().add_with_body(
-                                self.current_fn.instance().to_owned(),
-                                fn_data.instance().to_owned(),
-                                results.places().to_owned(),
-                                results.calls().to_owned(),
-                                body.to_owned(),
-                                body.span,
-                            );
+                                self.fn_storage_ref.borrow_mut().add_with_body(
+                                    self.current_fn.instance().to_owned(),
+                                    fn_data.instance().to_owned(),
+                                    results.places().to_owned(),
+                                    results.calls().to_owned(),
+                                    body.to_owned(),
+                                    body.span,
+                                );
 
-                            results.return_type(def_id, &body, self.tcx)
-                        } else {
-                            self.fn_storage_ref.borrow_mut().add_without_body(
-                                self.current_fn.instance().to_owned(),
-                                def_id.to_owned(),
-                                arg_tys.as_vec().to_owned(),
-                                self.tcx,
-                            );
-                            TrackedTy::from_ty(
-                                self.tcx
-                                    .fn_sig(def_id)
-                                    .subst(self.tcx, fn_data.instance().substs)
-                                    .output()
-                                    .skip_binder(),
-                            )
+                                results.return_type(def_id, &body, self.tcx)
+                            }
                         };
 
                         let normalized_destination = NormalizedPlace::from_place(
@@ -297,7 +290,7 @@ impl<'tcx> Analysis<'tcx> for TypeCollector<'tcx> {
             } else {
                 self.fn_storage_ref
                     .borrow_mut()
-                    .add_unhandled(terminator.to_owned());
+                    .add_unhandled(fn_ty.to_owned());
             }
         }
     }

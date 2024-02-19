@@ -9,11 +9,26 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{Local, Operand, Place};
 use rustc_middle::ty::TyCtxt;
 use rustc_utils::PlaceExt;
+use serde::ser::SerializeSeq;
+use serde::Serialize;
 
 // Newtype for a vec of locals.
 #[derive(Clone, Debug)]
 pub struct ImportantLocals {
     locals: HashSet<Local>,
+}
+
+impl Serialize for ImportantLocals {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.locals.len()))?;
+        for element in self.locals.iter() {
+            seq.serialize_element(&element.as_usize())?;
+        }
+        seq.end()
+    }
 }
 
 impl ImportantLocals {

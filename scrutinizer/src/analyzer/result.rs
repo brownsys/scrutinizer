@@ -1,19 +1,37 @@
 use itertools::Itertools;
 use rustc_hir::def_id::DefId;
-use rustc_middle::mir::Terminator;
+use rustc_middle::ty::Ty;
 use serde::ser::{Serialize, SerializeStruct};
 
+use super::important_locals::ImportantLocals;
 use crate::collector::{ClosureInfoStorage, FnInfo};
+
+pub struct WithImportantLocals<'tcx> {
+    pub fn_info: FnInfo<'tcx>,
+    pub important_locals: ImportantLocals,
+}
+
+impl<'tcx> Serialize for WithImportantLocals<'tcx> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("WithImportantLocals", 2)?;
+        state.serialize_field("fn_info", &self.fn_info)?;
+        state.serialize_field("important_locals", &self.important_locals)?;
+        state.end()
+    }
+}
 
 pub struct PurityAnalysisResult<'tcx> {
     def_id: DefId,
     annotated_pure: bool,
     status: bool,
     reason: String,
-    passing: Vec<FnInfo<'tcx>>,
-    failing: Vec<FnInfo<'tcx>>,
+    passing: Vec<WithImportantLocals<'tcx>>,
+    failing: Vec<WithImportantLocals<'tcx>>,
     closures: ClosureInfoStorage<'tcx>,
-    unhandled: Vec<Terminator<'tcx>>,
+    unhandled: Vec<Ty<'tcx>>,
 }
 
 impl<'tcx> Serialize for PurityAnalysisResult<'tcx> {
@@ -49,10 +67,10 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
         annotated_pure: bool,
         status: bool,
         reason: String,
-        passing: Vec<FnInfo<'tcx>>,
-        failing: Vec<FnInfo<'tcx>>,
+        passing: Vec<WithImportantLocals<'tcx>>,
+        failing: Vec<WithImportantLocals<'tcx>>,
         closures: ClosureInfoStorage<'tcx>,
-        unhandled: Vec<Terminator<'tcx>>,
+        unhandled: Vec<Ty<'tcx>>,
     ) -> Self {
         Self {
             def_id,

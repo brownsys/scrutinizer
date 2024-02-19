@@ -4,7 +4,7 @@ use serde::ser::{Serialize, SerializeStructVariant};
 use std::collections::HashSet;
 use std::fmt::Debug;
 
-use super::ty_ext::TyExt;
+use super::contains_erased::ContainsErased;
 use crate::util::transpose;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,12 +21,14 @@ impl<'tcx> TrackedTy<'tcx> {
             TrackedTy::Present(ty)
         }
     }
+
     pub fn into_vec(&self) -> Vec<Ty<'tcx>> {
         match self {
             TrackedTy::Present(ty) => vec![ty.to_owned()],
             TrackedTy::Erased(deps) => deps.iter().cloned().collect_vec(),
         }
     }
+
     pub fn join(&mut self, other: &Self) -> bool {
         match self {
             TrackedTy::Present(..) => false,
@@ -40,6 +42,7 @@ impl<'tcx> TrackedTy<'tcx> {
             },
         }
     }
+
     pub fn map(&self, lambda: impl Fn(Ty<'tcx>) -> Ty<'tcx>) -> TrackedTy<'tcx> {
         match self {
             TrackedTy::Present(ty) => TrackedTy::from_ty(lambda(ty.to_owned())),
@@ -48,14 +51,7 @@ impl<'tcx> TrackedTy<'tcx> {
             }
         }
     }
-    pub fn poisoned(&self) -> bool {
-        // If one of the influences in the erased type is erased itself,
-        // we consider it poisoned, as it can never be resolved with certainty.
-        match self {
-            TrackedTy::Present(_) => false,
-            TrackedTy::Erased(deps) => deps.iter().any(|ty| ty.contains_erased()),
-        }
-    }
+
     pub fn spread_tuple(&self) -> Vec<TrackedTy<'tcx>> {
         match self {
             TrackedTy::Present(ty) => ty

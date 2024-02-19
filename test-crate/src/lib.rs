@@ -3,17 +3,8 @@
 #![feature(const_refs_to_cell)]
 #![allow(dead_code, unused_variables)]
 
-mod btreemap;
-mod dyn_test;
-mod hashmap;
-mod hashset;
-mod lambdas;
-mod linked_list;
-mod misc;
-mod raw_ptr;
-mod structs;
-mod vartrack;
-mod vec;
+mod collections;
+mod tests;
 
 macro_rules! redefine {
     (<$origin_ty:ty> :: $func_ident:ident => $($param_ident:ident : $param_ty:ty),* => $ret_ty:ty, $purity:expr) => {

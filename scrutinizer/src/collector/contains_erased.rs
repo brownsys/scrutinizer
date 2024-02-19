@@ -1,10 +1,10 @@
 use rustc_middle::ty::{self, Ty};
 
-pub trait TyExt<'tcx> {
+pub trait ContainsErased<'tcx> {
     fn contains_erased(&self) -> bool;
 }
 
-impl<'tcx> TyExt<'tcx> for Ty<'tcx> {
+impl<'tcx> ContainsErased<'tcx> for Ty<'tcx> {
     // TODO: is there anyting else that we need to track?
     fn contains_erased(&self) -> bool {
         let contains_erased_type = self.walk().any(|ty| match ty.unpack() {

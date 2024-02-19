@@ -11,17 +11,13 @@ impl<'tcx> VirtualStack<'tcx> {
     pub fn new() -> Self {
         VirtualStack { stack: vec![] }
     }
+
     pub fn push(&mut self, item: VirtualStackItem<'tcx>) {
         self.stack.push(item);
     }
-    pub fn pop(&mut self) {
-        assert!(self.stack.pop().is_some());
-    }
+
     pub fn contains(&self, item: &VirtualStackItem<'tcx>) -> bool {
         self.stack.contains(&item)
-    }
-    pub fn len(&self) -> usize {
-        self.stack.len()
     }
 }
 

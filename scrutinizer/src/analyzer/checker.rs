@@ -5,7 +5,9 @@ use rustc_span::def_id::DefId;
 use std::collections::HashMap;
 
 use super::{
-    important_locals::ImportantLocals, raw_ptr::HasRawPtrDeref, result::PurityAnalysisResult,
+    important_locals::ImportantLocals,
+    raw_ptr::HasRawPtrDeref,
+    result::{PurityAnalysisResult, WithImportantLocals},
 };
 use crate::collector::{ClosureInfoStorageRef, FnInfo, FnInfoStorageRef};
 
@@ -32,31 +34,10 @@ fn check_fn_call_purity<'tcx>(fn_call: &FnInfo<'tcx>, tcx: TyCtxt<'tcx>) -> bool
 
 fn check_purity<'tcx>(
     storage: FnInfoStorageRef<'tcx>,
-    important_locals: ImportantLocals,
+    important_locals_storage: &HashMap<DefId, ImportantLocals>,
     tcx: TyCtxt<'tcx>,
 ) -> bool {
     let borrowed_storage = storage.borrow();
-
-    let mut important_locals_storage = HashMap::from_iter(
-        borrowed_storage
-            .fns()
-            .iter()
-            .map(|func| (func.def_id(), ImportantLocals::empty())),
-    );
-
-    important_locals_storage
-        .get_mut(&storage.borrow().origin().def_id())
-        .unwrap()
-        .join(&important_locals);
-
-    propagate_locals(
-        storage.clone(),
-        &mut important_locals_storage,
-        storage.borrow().origin().def_id(),
-        important_locals,
-        tcx,
-    );
-
     borrowed_storage.fns().iter().all(|fn_call| {
         trace!(
             "call={:?} has important_locals={:?}",
@@ -115,12 +96,44 @@ pub fn produce_result<'tcx>(
     tcx: TyCtxt<'tcx>,
 ) -> PurityAnalysisResult<'tcx> {
     let borrowed_storage = storage.borrow();
+
+    let mut important_locals_storage = HashMap::from_iter(
+        borrowed_storage
+            .fns()
+            .iter()
+            .map(|func| (func.def_id(), ImportantLocals::empty())),
+    );
+
+    important_locals_storage
+        .get_mut(&storage.borrow().origin().def_id())
+        .unwrap()
+        .join(&important_locals);
+
+    propagate_locals(
+        storage.clone(),
+        &mut important_locals_storage,
+        storage.borrow().origin().def_id(),
+        important_locals,
+        tcx,
+    );
+
     let (passing_calls, failing_calls) = borrowed_storage
         .fns()
         .clone()
         .into_iter()
-        .partition(|fn_call| check_fn_call_purity(fn_call, tcx));
-    if !check_purity(storage.clone(), important_locals.clone(), tcx) {
+        .map(|call| {
+            let important_locals = important_locals_storage
+                .get(&call.def_id())
+                .unwrap()
+                .to_owned();
+            WithImportantLocals {
+                fn_info: call,
+                important_locals,
+            }
+        })
+        .partition(|fn_call| check_fn_call_purity(&fn_call.fn_info, tcx));
+
+    if !check_purity(storage.clone(), &important_locals_storage, tcx) {
         let reason = if !borrowed_storage.unhandled().is_empty() {
             String::from("unhandled terminator")
         } else if !borrowed_storage

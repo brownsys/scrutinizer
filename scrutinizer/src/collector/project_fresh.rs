@@ -3,7 +3,7 @@ use rustc_abi::VariantIdx;
 use rustc_middle::mir::{tcx::PlaceTy, PlaceElem, ProjectionElem};
 use rustc_middle::ty::{self, TyCtxt};
 
-pub fn apply_fresh_projection<'tcx>(
+pub fn project_fresh<'tcx>(
     place_ty: &PlaceTy<'tcx>,
     projection_elem: &PlaceElem<'tcx>,
     tcx: TyCtxt<'tcx>,
