@@ -170,6 +170,7 @@ impl<'tcx> TypeCollector<'tcx> {
                                 results.calls().to_owned(),
                                 body.to_owned(),
                                 body.span,
+                                results.unhandled().to_owned(),
                             );
 
                             results.return_type(def_id, &body, self.tcx)
@@ -210,9 +211,7 @@ impl<'tcx> TypeCollector<'tcx> {
                 );
             }
         } else {
-            self.fn_storage_ref
-                .borrow_mut()
-                .add_unhandled(fn_ty.to_owned());
+            state.add_unhandled(fn_ty.to_owned());
         }
     }
 }
@@ -313,7 +312,8 @@ impl<'tcx> Analysis<'tcx> for TypeCollector<'tcx> {
                     let destructor = self.tcx.adt_destructor(adt_def_id);
 
                     if let Some(destructor) = destructor {
-                        let destructor_fn_ty = self.tcx.type_of(destructor.did).subst(self.tcx, substs);
+                        let destructor_fn_ty =
+                            self.tcx.type_of(destructor.did).subst(self.tcx, substs);
                         let destructor_args = &vec![Operand::Copy(place)];
                         let destructor_arg_tys =
                             ArgTys::new(vec![TrackedTy::from_ty(self.tcx.mk_mut_ref(

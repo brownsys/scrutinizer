@@ -1,6 +1,7 @@
+use itertools::Itertools;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::Body;
-use rustc_middle::ty;
+use rustc_middle::ty::{self, Ty};
 use rustc_span::Span;
 use serde::ser::{Serialize, SerializeStructVariant};
 use std::collections::{HashMap, HashSet};
@@ -18,6 +19,7 @@ pub enum FnInfo<'tcx> {
         calls: HashSet<Call<'tcx>>,
         body: Body<'tcx>,
         span: Span,
+        unhandled: Vec<Ty<'tcx>>,
     },
     Extern {
         parent: ty::Instance<'tcx>,
@@ -59,6 +61,7 @@ impl<'tcx> PartialEq for FnInfo<'tcx> {
                     places: l_places,
                     calls: l_calls,
                     span: l_span,
+                    unhandled: l_unhandled,
                     ..
                 },
                 Self::Regular {
@@ -67,6 +70,7 @@ impl<'tcx> PartialEq for FnInfo<'tcx> {
                     places: r_places,
                     calls: r_calls,
                     span: r_span,
+                    unhandled: r_unhandled,
                     ..
                 },
             ) => {
@@ -75,6 +79,7 @@ impl<'tcx> PartialEq for FnInfo<'tcx> {
                     && l_places == r_places
                     && l_calls == r_calls
                     && l_span == r_span
+                    && l_unhandled == r_unhandled
             }
             (
                 Self::Extern {
@@ -117,6 +122,7 @@ impl<'tcx> Serialize for FnInfo<'tcx> {
                 // ref places,
                 ref calls,
                 ref span,
+                ref unhandled,
                 ..
             } => {
                 let mut tv = serializer.serialize_struct_variant("FnInfo", 0, "Regular", 4)?;
@@ -125,6 +131,10 @@ impl<'tcx> Serialize for FnInfo<'tcx> {
                 // tv.serialize_field("places", &places)?;
                 tv.serialize_field("calls", calls)?;
                 tv.serialize_field("span", format!("{:?}", span).as_str())?;
+                tv.serialize_field(
+                    "unhandled",
+                    &unhandled.iter().map(|ty| format!("{:?}", ty)).collect_vec(),
+                )?;
                 tv.end()
             }
             FnInfo::Extern {

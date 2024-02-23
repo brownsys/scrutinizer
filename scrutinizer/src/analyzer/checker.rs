@@ -18,10 +18,16 @@ fn check_fn_call_purity<'tcx>(fn_call: &FnInfo<'tcx>, tcx: TyCtxt<'tcx>) -> bool
         Regex::new(r"alloc\[\w*\]::alloc").unwrap(),
     ];
     match fn_call {
-        FnInfo::Regular { instance, body, .. } => {
+        FnInfo::Regular {
+            instance,
+            body,
+            unhandled,
+            ..
+        } => {
             let def_path_str = format!("{:?}", instance.def_id());
             let raw_pointer_encountered = body.has_raw_ptr_deref(tcx);
-            !raw_pointer_encountered || allowed_libs.iter().any(|lib| lib.is_match(&def_path_str))
+            (!raw_pointer_encountered && unhandled.is_empty())
+                || allowed_libs.iter().any(|lib| lib.is_match(&def_path_str))
         }
         FnInfo::Ambiguous { def_id, parent, .. } | FnInfo::Extern { def_id, parent, .. } => {
             let def_path_str = format!("{:?}", def_id);
@@ -49,7 +55,7 @@ fn check_purity<'tcx>(
             .unwrap()
             .is_empty();
         check_fn_call_purity(fn_call, tcx) || has_no_important_locals
-    }) && borrowed_storage.unhandled().is_empty()
+    })
 }
 
 fn propagate_locals<'tcx>(
@@ -134,9 +140,7 @@ pub fn produce_result<'tcx>(
         .partition(|fn_call| check_fn_call_purity(&fn_call.fn_info, tcx));
 
     if !check_purity(storage.clone(), &important_locals_storage, tcx) {
-        let reason = if !borrowed_storage.unhandled().is_empty() {
-            String::from("unhandled terminator")
-        } else if !borrowed_storage
+        let reason = if !borrowed_storage
             .fns()
             .iter()
             .all(|fn_call| check_fn_call_purity(fn_call, tcx))
@@ -153,7 +157,6 @@ pub fn produce_result<'tcx>(
             passing_calls,
             failing_calls,
             closures.borrow().to_owned(),
-            borrowed_storage.unhandled().clone(),
         )
     } else {
         PurityAnalysisResult::new(
@@ -164,7 +167,6 @@ pub fn produce_result<'tcx>(
             passing_calls,
             failing_calls,
             closures.borrow().to_owned(),
-            borrowed_storage.unhandled().clone(),
         )
     }
 }

@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use rustc_abi::FieldIdx;
 use rustc_middle::mir::{tcx::PlaceTy, Body, Local, Operand, Place, PlaceElem};
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{Ty, TyCtxt};
 use rustc_mir_dataflow::{fmt::DebugWithContext, JoinSemiLattice};
 use rustc_span::def_id::DefId;
 use rustc_utils::PlaceExt;
@@ -65,6 +65,7 @@ impl<'tcx> Serialize for Call<'tcx> {
 pub struct TypeTracker<'tcx> {
     places: HashMap<NormalizedPlace<'tcx>, TrackedTy<'tcx>>,
     calls: HashSet<Call<'tcx>>,
+    unhandled: Vec<Ty<'tcx>>,
 }
 
 impl<'tcx> PartialEq for TypeTracker<'tcx> {
@@ -80,6 +81,7 @@ impl<'tcx> TypeTracker<'tcx> {
         TypeTracker {
             places,
             calls: HashSet::new(),
+            unhandled: vec![],
         }
     }
 
@@ -225,8 +227,16 @@ impl<'tcx> TypeTracker<'tcx> {
         self.calls.insert(call);
     }
 
+    pub fn add_unhandled(&mut self, unhandled: Ty<'tcx>) {
+        self.unhandled.push(unhandled);
+    }
+
     pub fn calls(&self) -> &HashSet<Call<'tcx>> {
         &self.calls
+    }
+
+    pub fn unhandled(&self) -> &Vec<Ty<'tcx>> {
+        &self.unhandled
     }
 }
 

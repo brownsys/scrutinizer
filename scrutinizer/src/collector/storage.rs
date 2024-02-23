@@ -17,7 +17,6 @@ pub type FnInfoStorageRef<'tcx> = Rc<RefCell<FnInfoStorage<'tcx>>>;
 pub struct FnInfoStorage<'tcx> {
     origin: ty::Instance<'tcx>,
     fns: Vec<FnInfo<'tcx>>,
-    unhandled: Vec<Ty<'tcx>>,
 }
 
 #[derive(Serialize)]
@@ -32,7 +31,6 @@ impl<'tcx> FnInfoStorage<'tcx> {
         Self {
             origin,
             fns: vec![],
-            unhandled: vec![],
         }
     }
 
@@ -44,6 +42,7 @@ impl<'tcx> FnInfoStorage<'tcx> {
         calls: HashSet<Call<'tcx>>,
         body: Body<'tcx>,
         span: Span,
+        unhandled: Vec<Ty<'tcx>>,
     ) {
         let fn_info = FnInfo::Regular {
             parent,
@@ -52,6 +51,7 @@ impl<'tcx> FnInfoStorage<'tcx> {
             calls,
             body,
             span,
+            unhandled,
         };
         if !self.fns.contains(&fn_info) {
             self.fns.push(fn_info);
@@ -81,10 +81,6 @@ impl<'tcx> FnInfoStorage<'tcx> {
         if !self.fns.contains(&fn_info) {
             self.fns.push(fn_info);
         }
-    }
-
-    pub fn add_unhandled(&mut self, new_unhandled: Ty<'tcx>) {
-        self.unhandled.push(new_unhandled);
     }
 
     pub fn get_regular(
@@ -119,9 +115,5 @@ impl<'tcx> FnInfoStorage<'tcx> {
 
     pub fn fns(&self) -> &Vec<FnInfo<'tcx>> {
         &self.fns
-    }
-
-    pub fn unhandled(&self) -> &Vec<Ty<'tcx>> {
-        &self.unhandled
     }
 }

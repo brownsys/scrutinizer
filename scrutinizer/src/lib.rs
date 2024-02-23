@@ -171,7 +171,6 @@ fn analyze_item<'tcx>(
                     vec![],
                     vec![],
                     ClosureInfoStorage::new(),
-                    vec![],
                 ));
             }
 
@@ -197,7 +196,6 @@ fn analyze_item<'tcx>(
                     vec![],
                     vec![],
                     ClosureInfoStorage::new(),
-                    vec![],
                 ));
             }
 
@@ -246,6 +244,7 @@ fn analyze_item<'tcx>(
                 results.calls().to_owned(),
                 body.to_owned(),
                 body.span,
+                results.unhandled().to_owned(),
             );
 
             // Calculate important locals.

@@ -1,6 +1,4 @@
-use itertools::Itertools;
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::Ty;
 use serde::ser::{Serialize, SerializeStruct};
 
 use super::important_locals::ImportantLocals;
@@ -31,7 +29,6 @@ pub struct PurityAnalysisResult<'tcx> {
     passing: Vec<WithImportantLocals<'tcx>>,
     failing: Vec<WithImportantLocals<'tcx>>,
     closures: ClosureInfoStorage<'tcx>,
-    unhandled: Vec<Ty<'tcx>>,
 }
 
 impl<'tcx> Serialize for PurityAnalysisResult<'tcx> {
@@ -49,14 +46,6 @@ impl<'tcx> Serialize for PurityAnalysisResult<'tcx> {
         state.serialize_field("passing", &self.passing)?;
         state.serialize_field("failing", &self.failing)?;
         state.serialize_field("closures", &self.closures)?;
-        state.serialize_field(
-            "unhandled",
-            &self
-                .unhandled
-                .iter()
-                .map(|terminator| format!("{:?}", terminator))
-                .collect_vec(),
-        )?;
         state.end()
     }
 }
@@ -70,7 +59,6 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
         passing: Vec<WithImportantLocals<'tcx>>,
         failing: Vec<WithImportantLocals<'tcx>>,
         closures: ClosureInfoStorage<'tcx>,
-        unhandled: Vec<Ty<'tcx>>,
     ) -> Self {
         Self {
             def_id,
@@ -80,7 +68,6 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
             passing,
             failing,
             closures,
-            unhandled,
         }
     }
 
