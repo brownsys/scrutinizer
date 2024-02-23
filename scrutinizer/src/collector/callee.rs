@@ -86,7 +86,8 @@ impl<'tcx> Callee<'tcx> {
             std::fs::write(
                 "once.rs",
                 tcx.instance_mir(instance.def).to_string(tcx).unwrap(),
-            ).unwrap();
+            )
+            .unwrap();
         }
         if tcx.is_closure(instance.def_id()) {
             match closure_info_storage.borrow().get(&instance.def_id()) {

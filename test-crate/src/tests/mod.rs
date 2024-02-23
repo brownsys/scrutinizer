@@ -1,6 +1,9 @@
-mod dyn_test;
-mod lambdas;
-mod misc;
+mod r#dyn;
+mod foreign;
+mod lam;
+mod leaky;
 mod raw_ptr;
+mod recursive;
+mod r#static;
 mod structs;
 mod vartrack;

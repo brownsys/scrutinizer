@@ -142,7 +142,7 @@ fn analyze_item<'tcx>(
 
     // Find the desired function by name.
     if args.function.as_str().is_empty()
-        || item.ident.name == rustc_span::symbol::Symbol::intern(args.function.as_str())
+        || tcx.def_path_str(def_id).contains(args.function.as_str())
     {
         if let ItemKind::Fn(fn_sig, ..) = &item.kind {
             // Retrieve body.

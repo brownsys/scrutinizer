@@ -38,11 +38,8 @@ impl<'tcx> CollectClosures<'tcx> for Body<'tcx> {
 
 impl<'a, 'tcx> Visitor<'tcx> for ClosureCollector<'a, 'tcx> {
     fn visit_ty(&mut self, ty: Ty<'tcx>, _: TyContext) {
-        self.closure_storage_ref.borrow_mut().try_resolve_and_insert(
-            ty,
-            self.current_fn.instance(),
-            vec![],
-            self.tcx,
-        );
+        self.closure_storage_ref
+            .borrow_mut()
+            .try_resolve_and_insert(ty, self.current_fn.instance(), vec![], self.tcx);
     }
 }

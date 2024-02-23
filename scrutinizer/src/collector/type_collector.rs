@@ -1,8 +1,9 @@
-use log::trace;
+use log::{trace, warn};
 use rustc_middle::mir::{
-    BasicBlock, Body, Location, Statement, StatementKind, Terminator, TerminatorKind,
+    BasicBlock, Body, Location, Operand, Place, Statement, StatementKind, Terminator,
+    TerminatorKind,
 };
-use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_mir_dataflow::{Analysis, AnalysisDomain, CallReturnPlaces, JoinSemiLattice};
 use rustc_utils::BodyExt;
 use std::collections::HashMap;
@@ -94,6 +95,126 @@ impl<'tcx> TypeCollector<'tcx> {
             })
             .unwrap()
     }
+
+    fn propagate(
+        &self,
+        fn_ty: Ty<'tcx>,
+        args: &Vec<Operand<'tcx>>,
+        arg_tys: ArgTys<'tcx>,
+        state: &mut TypeTracker<'tcx>,
+        destination: Option<&Place<'tcx>>,
+    ) {
+        // Apply substitutions to the type in case it contains generics.
+        let fn_ty = self.current_fn.substitute(fn_ty, self.tcx);
+
+        // TODO: handle different call types (e.g. FnPtr).
+        if let ty::FnDef(def_id, substs) = fn_ty.kind() {
+            // Calculate argument types, account for possible erasure.
+            let plausible_fns = self.current_fn.resolve(
+                def_id.to_owned(),
+                substs,
+                &arg_tys,
+                self.closure_storage_ref.clone(),
+                self.tcx,
+            );
+
+            if !plausible_fns.is_empty() {
+                for fn_data in plausible_fns.into_iter() {
+                    let def_id = fn_data.instance().def_id();
+
+                    // Skip if the call is repeated.
+                    let current_seen_item =
+                        VirtualStackItem::new(def_id, fn_data.tracked_args().to_owned());
+                    if self.virtual_stack.contains(&current_seen_item) {
+                        continue;
+                    };
+
+                    state.add_call(Call::new(def_id.to_owned(), args.to_owned()));
+
+                    let return_ty: TrackedTy<'_> = match fn_data.instance().def {
+                        ty::InstanceDef::Intrinsic(..) | ty::InstanceDef::Virtual(..) => {
+                            self.fn_storage_ref.borrow_mut().add_without_body(
+                                self.current_fn.instance().to_owned(),
+                                def_id.to_owned(),
+                                arg_tys.as_vec().to_owned(),
+                                self.tcx,
+                            );
+                            TrackedTy::from_ty(
+                                self.tcx
+                                    .fn_sig(def_id)
+                                    .subst(self.tcx, fn_data.instance().substs)
+                                    .output()
+                                    .skip_binder(),
+                            )
+                        }
+                        _ => {
+                            let body = fn_data.substitute(
+                                self.tcx.instance_mir(fn_data.instance().def).to_owned(),
+                                self.tcx,
+                            );
+
+                            // Swap the current instance and continue recursively.
+                            let results = TypeCollector::new(
+                                fn_data.clone(),
+                                self.virtual_stack.clone(),
+                                self.fn_storage_ref.clone(),
+                                self.closure_storage_ref.clone(),
+                                self.tcx,
+                            )
+                            .run();
+
+                            self.fn_storage_ref.borrow_mut().add_with_body(
+                                self.current_fn.instance().to_owned(),
+                                fn_data.instance().to_owned(),
+                                results.places().to_owned(),
+                                results.calls().to_owned(),
+                                body.to_owned(),
+                                body.span,
+                            );
+
+                            results.return_type(def_id, &body, self.tcx)
+                        }
+                    };
+
+                    if let Some(destination) = destination {
+                        let normalized_destination = NormalizedPlace::from_place(
+                            &destination,
+                            self.tcx,
+                            self.current_fn.instance().def_id(),
+                        );
+
+                        trace!(
+                            "handling return terminator current_fn={:?} place={:?} ty={:?} from={:?}",
+                            self.current_fn.instance().def_id(),
+                            normalized_destination,
+                            return_ty,
+                            def_id
+                        );
+
+                        state.update_with(
+                            normalized_destination,
+                            return_ty,
+                            &self.substituted_body,
+                            self.current_fn.instance().def_id(),
+                            self.tcx,
+                        );
+                    }
+                }
+            } else {
+                state.add_call(Call::new(def_id.to_owned(), args.to_owned()));
+                self.fn_storage_ref.borrow_mut().add_without_body(
+                    self.current_fn.instance().to_owned(),
+                    def_id.to_owned(),
+                    arg_tys.as_vec().to_owned(),
+                    self.tcx,
+                );
+            }
+        } else {
+            self.fn_storage_ref
+                .borrow_mut()
+                .add_unhandled(fn_ty.to_owned());
+        }
+    }
 }
 
 impl<'tcx> AnalysisDomain<'tcx> for TypeCollector<'tcx> {
@@ -167,20 +288,14 @@ impl<'tcx> Analysis<'tcx> for TypeCollector<'tcx> {
         terminator: &'mir Terminator<'tcx>,
         _location: Location,
     ) {
-        if let TerminatorKind::Call {
-            func,
-            args,
-            destination,
-            ..
-        } = &terminator.kind
-        {
-            // Apply substitutions to the type in case it contains generics.
-            let fn_ty = self
-                .current_fn
-                .substitute(func.ty(&self.substituted_body, self.tcx), self.tcx);
-
-            // TODO: handle different call types (e.g. FnPtr).
-            if let ty::FnDef(def_id, substs) = fn_ty.kind() {
+        match terminator.kind {
+            TerminatorKind::Call {
+                ref func,
+                ref args,
+                ref destination,
+                ..
+            } => {
+                let fn_ty = func.ty(&self.substituted_body, self.tcx);
                 let arg_tys = ArgTys::from_args(
                     args,
                     self.current_fn.instance().def_id(),
@@ -188,110 +303,37 @@ impl<'tcx> Analysis<'tcx> for TypeCollector<'tcx> {
                     state,
                     self.tcx,
                 );
+                self.propagate(fn_ty, args, arg_tys, state, Some(destination));
+            }
+            TerminatorKind::Drop { place, .. } => {
+                let place_ty = place.ty(&self.substituted_body, self.tcx);
 
-                // Calculate argument types, account for possible erasure.
-                let plausible_fns = self.current_fn.resolve(
-                    def_id.to_owned(),
-                    substs,
-                    &arg_tys,
-                    self.closure_storage_ref.clone(),
-                    self.tcx,
-                );
+                if let ty::TyKind::Adt(adt_def, substs) = place_ty.ty.kind() {
+                    let adt_def_id = adt_def.did();
+                    let destructor = self.tcx.adt_destructor(adt_def_id);
 
-                if !plausible_fns.is_empty() {
-                    for fn_data in plausible_fns.into_iter() {
-                        let def_id = fn_data.instance().def_id();
+                    if let Some(destructor) = destructor {
+                        let destructor_fn_ty = self.tcx.type_of(destructor.did).subst(self.tcx, substs);
+                        let destructor_args = &vec![Operand::Copy(place)];
+                        let destructor_arg_tys =
+                            ArgTys::new(vec![TrackedTy::from_ty(self.tcx.mk_mut_ref(
+                                self.tcx.mk_region_from_kind(ty::RegionKind::ReErased),
+                                place.ty(&self.substituted_body, self.tcx).ty,
+                            ))]);
 
-                        // Skip if the call is repeated.
-                        let current_seen_item =
-                            VirtualStackItem::new(def_id, fn_data.tracked_args().to_owned());
-                        if self.virtual_stack.contains(&current_seen_item) {
-                            continue;
-                        };
-
-                        state.add_call(Call::new(def_id, args.to_owned()));
-
-                        let return_ty: TrackedTy<'_> = match fn_data.instance().def {
-                            ty::InstanceDef::Intrinsic(..) | ty::InstanceDef::Virtual(..) => {
-                                self.fn_storage_ref.borrow_mut().add_without_body(
-                                    self.current_fn.instance().to_owned(),
-                                    def_id.to_owned(),
-                                    arg_tys.as_vec().to_owned(),
-                                    self.tcx,
-                                );
-                                TrackedTy::from_ty(
-                                    self.tcx
-                                        .fn_sig(def_id)
-                                        .subst(self.tcx, fn_data.instance().substs)
-                                        .output()
-                                        .skip_binder(),
-                                )
-                            }
-                            _ => {
-                                let body = fn_data.substitute(
-                                    self.tcx.instance_mir(fn_data.instance().def).to_owned(),
-                                    self.tcx,
-                                );
-
-                                // Swap the current instance and continue recursively.
-                                let results = TypeCollector::new(
-                                    fn_data.clone(),
-                                    self.virtual_stack.clone(),
-                                    self.fn_storage_ref.clone(),
-                                    self.closure_storage_ref.clone(),
-                                    self.tcx,
-                                )
-                                .run();
-
-                                self.fn_storage_ref.borrow_mut().add_with_body(
-                                    self.current_fn.instance().to_owned(),
-                                    fn_data.instance().to_owned(),
-                                    results.places().to_owned(),
-                                    results.calls().to_owned(),
-                                    body.to_owned(),
-                                    body.span,
-                                );
-
-                                results.return_type(def_id, &body, self.tcx)
-                            }
-                        };
-
-                        let normalized_destination = NormalizedPlace::from_place(
-                            &destination,
-                            self.tcx,
-                            self.current_fn.instance().def_id(),
-                        );
-
-                        trace!(
-                            "handling return terminator current_fn={:?} place={:?} ty={:?} from={:?}",
-                            self.current_fn.instance().def_id(),
-                            normalized_destination,
-                            return_ty,
-                            def_id
-                        );
-
-                        state.update_with(
-                            normalized_destination,
-                            return_ty,
-                            &self.substituted_body,
-                            self.current_fn.instance().def_id(),
-                            self.tcx,
+                        self.propagate(
+                            destructor_fn_ty,
+                            destructor_args,
+                            destructor_arg_tys,
+                            state,
+                            None,
                         );
                     }
                 } else {
-                    state.add_call(Call::new(def_id.to_owned(), args.to_owned()));
-                    self.fn_storage_ref.borrow_mut().add_without_body(
-                        self.current_fn.instance().to_owned(),
-                        def_id.to_owned(),
-                        arg_tys.as_vec().to_owned(),
-                        self.tcx,
-                    );
+                    warn!("dropping a non-adt type: {}", place_ty.ty);
                 }
-            } else {
-                self.fn_storage_ref
-                    .borrow_mut()
-                    .add_unhandled(fn_ty.to_owned());
             }
+            _ => {}
         }
     }
 
