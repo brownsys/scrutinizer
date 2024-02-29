@@ -1,7 +1,8 @@
 mod compute;
 mod facts;
+mod important;
 mod intern;
 mod location_table;
 mod tab_delim;
 
-pub use compute::compute_dependent_locals;
+pub use important::ImportantLocals;

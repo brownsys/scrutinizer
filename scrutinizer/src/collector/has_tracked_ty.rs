@@ -3,15 +3,14 @@ use rustc_middle::mir::{AggregateKind, BinOp, CastKind, NullOp, Operand, Place, 
 use rustc_middle::ty::{self, TyCtxt};
 use std::collections::HashSet;
 
-use super::closure_info::ClosureInfoStorageRef;
-use super::normalized_place::NormalizedPlace;
-use super::tracked_ty::TrackedTy;
-use super::type_tracker::TypeTracker;
+use super::collector_domain::CollectorDomain;
+use super::storage::ClosureInfoStorageRef;
+use super::structs::{NormalizedPlace, TrackedTy};
 
 pub trait HasTrackedTy<'tcx> {
     fn tracked_ty(
         &self,
-        type_tracker: &mut TypeTracker<'tcx>,
+        type_tracker: &mut CollectorDomain<'tcx>,
         closure_info_storage: ClosureInfoStorageRef<'tcx>,
         instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
@@ -21,7 +20,7 @@ pub trait HasTrackedTy<'tcx> {
 impl<'tcx> HasTrackedTy<'tcx> for Place<'tcx> {
     fn tracked_ty(
         &self,
-        type_tracker: &mut TypeTracker<'tcx>,
+        type_tracker: &mut CollectorDomain<'tcx>,
         _closure_info_storage: ClosureInfoStorageRef<'tcx>,
         instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
@@ -41,7 +40,7 @@ impl<'tcx> HasTrackedTy<'tcx> for Place<'tcx> {
 impl<'tcx> HasTrackedTy<'tcx> for Operand<'tcx> {
     fn tracked_ty(
         &self,
-        type_tracker: &mut TypeTracker<'tcx>,
+        type_tracker: &mut CollectorDomain<'tcx>,
         closure_info_storage: ClosureInfoStorageRef<'tcx>,
         instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
@@ -70,7 +69,7 @@ impl<'tcx> BinOpWithTys<'tcx> {
 impl<'tcx> HasTrackedTy<'tcx> for BinOpWithTys<'tcx> {
     fn tracked_ty(
         &self,
-        _type_tracker: &mut TypeTracker<'tcx>,
+        _type_tracker: &mut CollectorDomain<'tcx>,
         _closure_info_storage: ClosureInfoStorageRef<'tcx>,
         _instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
@@ -100,7 +99,7 @@ impl<'tcx> HasTrackedTy<'tcx> for BinOpWithTys<'tcx> {
 impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
     fn tracked_ty(
         &self,
-        type_tracker: &mut TypeTracker<'tcx>,
+        type_tracker: &mut CollectorDomain<'tcx>,
         closure_info_storage: ClosureInfoStorageRef<'tcx>,
         instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
@@ -146,9 +145,16 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                 let tracked_ty =
                     operand.tracked_ty(type_tracker, closure_info_storage.clone(), instance, tcx);
                 match cast_kind {
-                    CastKind::PointerFromExposedAddress
-                    | CastKind::PointerExposeAddress
-                    | CastKind::Transmute => TrackedTy::from_ty(ty.to_owned()),
+                    CastKind::PointerFromExposedAddress | CastKind::PointerExposeAddress => {
+                        TrackedTy::from_ty(ty.to_owned())
+                    }
+                    CastKind::Transmute => {
+                        if ty.is_fn_ptr() {
+                            tracked_ty
+                        } else {
+                            TrackedTy::from_ty(ty.to_owned())
+                        }
+                    }
                     _ => tracked_ty,
                 }
             }

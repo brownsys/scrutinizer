@@ -5,11 +5,11 @@ use rustc_middle::ty::{self, TyCtxt};
 use rustc_utils::BodyExt;
 
 use super::arg_tys::ArgTys;
-use super::closure_info::{ClosureInfo, ClosureInfoStorageRef};
-use super::has_arg_tys::HasArgTys;
+use super::HasArgTys;
+use super::{ClosureInfo, ClosureInfoStorageRef};
 
 #[derive(Clone, Debug)]
-pub enum Callee<'tcx> {
+pub enum PartialFunctionInfo<'tcx> {
     Function {
         instance: ty::Instance<'tcx>,
         tracked_args: ArgTys<'tcx>,
@@ -21,7 +21,7 @@ pub enum Callee<'tcx> {
     },
 }
 
-impl<'tcx> Callee<'tcx> {
+impl<'tcx> PartialFunctionInfo<'tcx> {
     pub fn new_function(instance: ty::Instance<'tcx>, tracked_args: ArgTys<'tcx>) -> Self {
         Self::Function {
             instance,
@@ -31,7 +31,7 @@ impl<'tcx> Callee<'tcx> {
 
     pub fn is_closure(&self) -> bool {
         match self {
-            Callee::Closure { .. } => true,
+            PartialFunctionInfo::Closure { .. } => true,
             _ => false,
         }
     }
@@ -64,7 +64,7 @@ impl<'tcx> Callee<'tcx> {
 
     pub fn expect_closure_info(&self) -> &ClosureInfo<'tcx> {
         match self {
-            Callee::Closure { closure_info, .. } => closure_info,
+            PartialFunctionInfo::Closure { closure_info, .. } => closure_info,
             _ => panic!("expect_closure_info called on {:?}", self),
         }
     }
@@ -74,7 +74,7 @@ impl<'tcx> Callee<'tcx> {
         arg_tys: &ArgTys<'tcx>,
         closure_info_storage: ClosureInfoStorageRef<'tcx>,
         tcx: TyCtxt<'tcx>,
-    ) -> Callee<'tcx> {
+    ) -> PartialFunctionInfo<'tcx> {
         let inferred_args = if tcx.is_closure(instance.def_id()) {
             arg_tys.as_closure()
         } else {
@@ -91,16 +91,18 @@ impl<'tcx> Callee<'tcx> {
         }
         if tcx.is_closure(instance.def_id()) {
             match closure_info_storage.borrow().get(&instance.def_id()) {
-                Some(closure_info) => {
-                    Callee::new_closure(instance, merged_arg_tys, closure_info.to_owned())
-                }
+                Some(closure_info) => PartialFunctionInfo::new_closure(
+                    instance,
+                    merged_arg_tys,
+                    closure_info.to_owned(),
+                ),
                 None => panic!(
                     "did not find a closure {:?} inside closure storage",
                     instance.def_id()
                 ),
             }
         } else {
-            Callee::new_function(instance, merged_arg_tys)
+            PartialFunctionInfo::new_function(instance, merged_arg_tys)
         }
     }
 
@@ -149,7 +151,7 @@ impl<'tcx> Callee<'tcx> {
         arg_tys: &ArgTys<'tcx>,
         closure_info_storage: ClosureInfoStorageRef<'tcx>,
         tcx: TyCtxt<'tcx>,
-    ) -> Vec<Callee<'tcx>> {
+    ) -> Vec<PartialFunctionInfo<'tcx>> {
         // Resolve function instances that need to be analyzed.
         let maybe_instance =
             ty::Instance::resolve(tcx, ty::ParamEnv::reveal_all(), def_id, substs).unwrap();
@@ -160,7 +162,7 @@ impl<'tcx> Callee<'tcx> {
         };
 
         let fns = if tcx.is_mir_available(def_id) {
-            vec![Callee::assemble(
+            vec![PartialFunctionInfo::assemble(
                 maybe_instance.unwrap(),
                 &arg_tys,
                 closure_info_storage.clone(),
@@ -176,7 +178,12 @@ impl<'tcx> Callee<'tcx> {
             let assembled_callees = plausible_instances
                 .into_iter()
                 .map(|instance| {
-                    Callee::assemble(instance, &arg_tys, closure_info_storage.clone(), tcx)
+                    PartialFunctionInfo::assemble(
+                        instance,
+                        &arg_tys,
+                        closure_info_storage.clone(),
+                        tcx,
+                    )
                 })
                 .collect();
             assembled_callees
@@ -186,7 +193,10 @@ impl<'tcx> Callee<'tcx> {
             .map(|fn_data| {
                 if !tcx.is_closure(fn_data.instance().def_id()) {
                     let resolved_instance = self.substitute(fn_data.instance().to_owned(), tcx);
-                    Callee::new_function(resolved_instance, fn_data.tracked_args().to_owned())
+                    PartialFunctionInfo::new_function(
+                        resolved_instance,
+                        fn_data.tracked_args().to_owned(),
+                    )
                 } else {
                     match closure_info_storage
                         .borrow()
@@ -194,7 +204,7 @@ impl<'tcx> Callee<'tcx> {
                     {
                         Some(upvars) => {
                             let resolved_instance = upvars.extract_instance(tcx);
-                            Callee::new_closure(
+                            PartialFunctionInfo::new_closure(
                                 resolved_instance,
                                 fn_data.tracked_args().to_owned(),
                                 fn_data.expect_closure_info().to_owned(),

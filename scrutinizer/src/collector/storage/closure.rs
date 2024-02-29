@@ -3,7 +3,7 @@ use rustc_span::def_id::DefId;
 use serde::{ser::SerializeMap, Serialize};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use super::tracked_ty::TrackedTy;
+use super::{ClosureInfo, TrackedTy};
 
 pub type ClosureInfoStorageRef<'tcx> = Rc<RefCell<ClosureInfoStorage<'tcx>>>;
 
@@ -67,25 +67,6 @@ impl<'tcx> ClosureInfoStorage<'tcx> {
                     upvars,
                     with_substs: resolved_closure_ty,
                 });
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ClosureInfo<'tcx> {
-    pub with_substs: Ty<'tcx>,
-    pub upvars: Vec<TrackedTy<'tcx>>,
-}
-
-impl<'tcx> ClosureInfo<'tcx> {
-    pub fn extract_instance(&self, tcx: TyCtxt<'tcx>) -> ty::Instance<'tcx> {
-        match self.with_substs.kind() {
-            ty::TyKind::Closure(def_id, substs) => {
-                ty::Instance::resolve(tcx, ty::ParamEnv::reveal_all(), *def_id, substs)
-                    .unwrap()
-                    .unwrap()
-            }
-            _ => unreachable!(""),
         }
     }
 }

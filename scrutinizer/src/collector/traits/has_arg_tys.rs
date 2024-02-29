@@ -1,8 +1,8 @@
 use rustc_middle::ty::{self, TyCtxt};
 use std::iter::once;
 
-use super::arg_tys::ArgTys;
-use super::tracked_ty::TrackedTy;
+use super::ArgTys;
+use super::TrackedTy;
 
 pub trait HasArgTys<'tcx> {
     fn arg_tys(&self, tcx: TyCtxt<'tcx>) -> ArgTys<'tcx>;

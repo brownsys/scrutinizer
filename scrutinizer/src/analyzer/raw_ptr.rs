@@ -1,5 +1,7 @@
-use rustc_middle::mir::visit::Visitor;
-use rustc_middle::mir::{self, Body, Place};
+use rustc_middle::mir::{
+    visit::Visitor, Body, Location, Mutability, Place, ProjectionElem, Rvalue, Statement,
+    StatementKind,
+};
 use rustc_middle::ty::TyCtxt;
 
 struct RawPtrDerefVisitor<'a, 'tcx> {
@@ -31,16 +33,22 @@ impl<'tcx> HasRawPtrDeref<'tcx> for Body<'tcx> {
 
 impl<'a, 'tcx> HasRawPtrDeref<'tcx> for PlaceWithBody<'a, 'tcx> {
     fn has_raw_ptr_deref(&self, tcx: TyCtxt<'tcx>) -> bool {
-        self.place.iter_projections().any(|(place_ref, _)| {
-            let ty = place_ref.ty(self.body, tcx).ty;
-            ty.is_unsafe_ptr() && ty.is_mutable_ptr()
-        })
+        self.place
+            .iter_projections()
+            .any(|(place_ref, projection)| {
+                if let ProjectionElem::Deref = projection {
+                    let ty = place_ref.ty(self.body, tcx).ty;
+                    ty.is_unsafe_ptr() && ty.is_mutable_ptr()
+                } else {
+                    false
+                }
+            })
     }
 }
 
-impl<'a, 'tcx> mir::visit::Visitor<'tcx> for RawPtrDerefVisitor<'a, 'tcx> {
-    fn visit_statement(&mut self, statement: &mir::Statement<'tcx>, location: mir::Location) {
-        if let mir::StatementKind::Assign(assignment) = &statement.kind {
+impl<'a, 'tcx> Visitor<'tcx> for RawPtrDerefVisitor<'a, 'tcx> {
+    fn visit_statement(&mut self, statement: &Statement<'tcx>, location: Location) {
+        if let StatementKind::Assign(assignment) = &statement.kind {
             let place = &assignment.0;
             let rvalue = &assignment.1;
 
@@ -52,12 +60,12 @@ impl<'a, 'tcx> mir::visit::Visitor<'tcx> for RawPtrDerefVisitor<'a, 'tcx> {
             if place_ext.has_raw_ptr_deref(self.tcx) {
                 self.has_raw_ptr_deref = true;
             } else {
-                if let mir::Rvalue::Ref(_, borrow_kind, borrow_place) = rvalue {
+                if let Rvalue::Ref(_, borrow_kind, borrow_place) = rvalue {
                     let borrow_place_ext = PlaceWithBody {
                         place: borrow_place,
                         body: self.body,
                     };
-                    if let mir::Mutability::Mut = borrow_kind.mutability() {
+                    if let Mutability::Mut = borrow_kind.mutability() {
                         if borrow_place_ext.has_raw_ptr_deref(self.tcx) {
                             self.has_raw_ptr_deref = true;
                         }

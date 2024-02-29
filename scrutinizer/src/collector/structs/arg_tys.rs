@@ -5,7 +5,7 @@ use rustc_span::def_id::DefId;
 
 use super::normalized_place::NormalizedPlace;
 use super::tracked_ty::TrackedTy;
-use super::type_tracker::TypeTracker;
+use super::CollectorDomain;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArgTys<'tcx> {
@@ -21,7 +21,7 @@ impl<'tcx> ArgTys<'tcx> {
         args: &Vec<Operand<'tcx>>,
         def_id: DefId,
         body: &Body<'tcx>,
-        state: &TypeTracker<'tcx>,
+        state: &CollectorDomain<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> Self {
         ArgTys {

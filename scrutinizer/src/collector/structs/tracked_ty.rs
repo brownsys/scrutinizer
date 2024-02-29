@@ -4,8 +4,15 @@ use serde::ser::{Serialize, SerializeStructVariant};
 use std::collections::HashSet;
 use std::fmt::Debug;
 
-use super::contains_erased::ContainsErased;
-use crate::util::transpose;
+use super::ContainsErased;
+
+pub fn transpose<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
+    let len = v[0].len();
+    let mut iters: Vec<_> = v.into_iter().map(|n| n.into_iter()).collect_vec();
+    (0..len)
+        .map(|_| iters.iter_mut().map(|n| n.next().unwrap()).collect_vec())
+        .collect_vec()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrackedTy<'tcx> {

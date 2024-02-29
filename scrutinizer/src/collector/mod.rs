@@ -1,26 +1,11 @@
-mod arg_tys;
-mod callee;
 mod closure_collector;
-mod closure_info;
-mod contains_erased;
+mod collector;
+mod collector_domain;
 mod dataflow_shim;
-mod fn_info;
-mod has_arg_tys;
 mod has_tracked_ty;
-mod normalized_place;
-mod project_fresh;
-mod storage;
-mod tracked_ty;
-mod type_collector;
-mod type_tracker;
-mod virtual_stack;
 
-pub use arg_tys::ArgTys;
-pub use callee::Callee;
-pub use closure_info::{ClosureInfoStorage, ClosureInfoStorageRef};
-pub use fn_info::FnInfo;
-pub use storage::FilteredCalls;
-pub use storage::{FnInfoStorage, FnInfoStorageRef};
-pub use tracked_ty::TrackedTy;
-pub use type_collector::TypeCollector;
-pub use virtual_stack::VirtualStack;
+pub mod storage;
+pub mod structs;
+pub mod traits;
+
+pub use collector::Collector;

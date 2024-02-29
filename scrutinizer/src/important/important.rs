@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::vartrack::compute_dependent_locals;
+use super::compute::compute_dependent_locals;
 
 use flowistry::indexed::impls::LocationOrArg;
 use flowistry::infoflow::Direction;
@@ -32,25 +32,26 @@ impl Serialize for ImportantLocals {
 }
 
 impl ImportantLocals {
-    pub fn new(locals: HashSet<Local>) -> Self {
-        Self { locals }
+    pub fn from_important_args(important_args: Vec<usize>, def_id: DefId, tcx: TyCtxt) -> Self {
+        let targets = vec![important_args
+            .iter()
+            .map(|arg| {
+                let arg_local = Local::from_usize(*arg);
+                let arg_place = Place::make(arg_local, &[], tcx);
+                return (arg_place, LocationOrArg::Arg(arg_local));
+            })
+            .collect_vec()];
+        ImportantLocals::from_locals(HashSet::from_iter(
+            compute_dependent_locals(tcx, def_id, targets, Direction::Forward).into_iter(),
+        ))
     }
 
-    pub fn empty() -> Self {
-        Self {
-            locals: HashSet::new(),
-        }
+    fn from_locals(locals: HashSet<Local>) -> Self {
+        Self { locals }
     }
 
     pub fn is_empty(&self) -> bool {
         self.locals.is_empty()
-    }
-
-    pub fn join(&mut self, other: &Self) -> bool {
-        other
-            .locals
-            .iter()
-            .fold(false, |acc, elt| self.locals.insert(elt.to_owned()) || acc)
     }
 
     // Construct new important locals which influence args.
@@ -62,7 +63,7 @@ impl ImportantLocals {
     ) -> Self {
         // Constructors are final and have no important locals.
         if tcx.is_constructor(callee_def_id) {
-            return ImportantLocals::new(HashSet::new());
+            return ImportantLocals::from_locals(HashSet::new());
         }
         // Construct targets of the arguments.
         let important_args_to_callee = args_from_caller
@@ -90,7 +91,7 @@ impl ImportantLocals {
                 })
                 .collect()];
             // Compute new dependencies for all important args.
-            ImportantLocals::new(HashSet::from_iter(
+            ImportantLocals::from_locals(HashSet::from_iter(
                 compute_dependent_locals(
                     tcx,
                     callee_def_id,
@@ -100,7 +101,7 @@ impl ImportantLocals {
                 .into_iter(),
             ))
         } else {
-            ImportantLocals::new(HashSet::from_iter(important_args_to_callee.into_iter()))
+            ImportantLocals::from_locals(HashSet::from_iter(important_args_to_callee.into_iter()))
         }
     }
 }

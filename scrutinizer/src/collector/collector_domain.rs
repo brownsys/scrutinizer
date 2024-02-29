@@ -1,87 +1,55 @@
 use itertools::Itertools;
 use rustc_abi::FieldIdx;
-use rustc_middle::mir::{tcx::PlaceTy, Body, Local, Operand, Place, PlaceElem};
+use rustc_middle::mir::{tcx::PlaceTy, Body, Local, Place, PlaceElem};
 use rustc_middle::ty::{Ty, TyCtxt};
 use rustc_mir_dataflow::{fmt::DebugWithContext, JoinSemiLattice};
 use rustc_span::def_id::DefId;
 use rustc_utils::PlaceExt;
-use serde::ser::SerializeStruct;
-use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
-use super::arg_tys::ArgTys;
-use super::closure_info::ClosureInfo;
-use super::normalized_place::NormalizedPlace;
-use super::project_fresh::project_fresh;
-use super::tracked_ty::TrackedTy;
-use super::type_collector::TypeCollector;
-
-#[derive(Clone, Debug, Hash)]
-pub struct Call<'tcx> {
-    def_id: DefId,
-    args: Vec<Operand<'tcx>>,
-}
-
-impl<'tcx> PartialEq for Call<'tcx> {
-    fn eq(&self, other: &Self) -> bool {
-        self.def_id == other.def_id && self.args == other.args
-    }
-}
-
-impl<'tcx> Eq for Call<'tcx> {}
-
-impl<'tcx> Call<'tcx> {
-    pub fn new(def_id: DefId, args: Vec<Operand<'tcx>>) -> Self {
-        Self { def_id, args }
-    }
-    pub fn args(&self) -> &Vec<Operand<'tcx>> {
-        &self.args
-    }
-    pub fn def_id(&self) -> &DefId {
-        &self.def_id
-    }
-}
-
-impl<'tcx> Serialize for Call<'tcx> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut state = serializer.serialize_struct("Call", 2)?;
-        state.serialize_field("def_id", format!("{:?}", self.def_id).as_str())?;
-        state.serialize_field(
-            "args",
-            &self
-                .args
-                .iter()
-                .map(|arg| format!("{:?}", arg))
-                .collect_vec(),
-        )?;
-        state.end()
-    }
-}
+use super::collector::Collector;
+use super::structs::{ArgTys, ClosureInfo, FunctionCall, FunctionInfo, NormalizedPlace, TrackedTy};
+use super::traits::RefreshAndProject;
 
 #[derive(Debug, Clone)]
-pub struct TypeTracker<'tcx> {
+pub struct CollectorDomain<'tcx> {
     places: HashMap<NormalizedPlace<'tcx>, TrackedTy<'tcx>>,
-    calls: HashSet<Call<'tcx>>,
-    unhandled: Vec<Ty<'tcx>>,
+    calls: HashSet<FunctionCall<'tcx>>,
+    unhandled: HashSet<Ty<'tcx>>,
 }
 
-impl<'tcx> PartialEq for TypeTracker<'tcx> {
+impl<'tcx> PartialEq for CollectorDomain<'tcx> {
     fn eq(&self, other: &Self) -> bool {
         self.places == other.places
     }
 }
 
-impl<'tcx> Eq for TypeTracker<'tcx> {}
+impl<'tcx> Eq for CollectorDomain<'tcx> {}
 
-impl<'tcx> TypeTracker<'tcx> {
+impl<'tcx> CollectorDomain<'tcx> {
     pub fn new(places: HashMap<NormalizedPlace<'tcx>, TrackedTy<'tcx>>) -> Self {
-        TypeTracker {
+        CollectorDomain {
             places,
             calls: HashSet::new(),
-            unhandled: vec![],
+            unhandled: HashSet::new(),
+        }
+    }
+
+    pub fn from_regular_fn_info(fn_info: &FunctionInfo<'tcx>) -> Self {
+        if let FunctionInfo::WithBody {
+            places,
+            calls,
+            unhandled,
+            ..
+        } = fn_info
+        {
+            CollectorDomain {
+                places: places.clone(),
+                calls: calls.clone(),
+                unhandled: unhandled.clone(),
+            }
+        } else {
+            panic!("non-regular fn_info");
         }
     }
 
@@ -173,7 +141,7 @@ impl<'tcx> TypeTracker<'tcx> {
                     projection_tail
                         .iter()
                         .fold(initial_place, |place_ty, projection_elem| {
-                            project_fresh(&place_ty, projection_elem, tcx)
+                            place_ty.refresh_and_project(projection_elem, tcx)
                         })
                         .ty
                 });
@@ -223,26 +191,26 @@ impl<'tcx> TypeTracker<'tcx> {
         }
     }
 
-    pub fn add_call(&mut self, call: Call<'tcx>) {
+    pub fn add_call(&mut self, call: FunctionCall<'tcx>) {
         self.calls.insert(call);
     }
 
     pub fn add_unhandled(&mut self, unhandled: Ty<'tcx>) {
-        self.unhandled.push(unhandled);
+        self.unhandled.insert(unhandled);
     }
 
-    pub fn calls(&self) -> &HashSet<Call<'tcx>> {
+    pub fn calls(&self) -> &HashSet<FunctionCall<'tcx>> {
         &self.calls
     }
 
-    pub fn unhandled(&self) -> &Vec<Ty<'tcx>> {
+    pub fn unhandled(&self) -> &HashSet<Ty<'tcx>> {
         &self.unhandled
     }
 }
 
-impl<'tcx> DebugWithContext<TypeCollector<'tcx>> for TypeTracker<'tcx> {}
+impl<'tcx> DebugWithContext<Collector<'tcx>> for CollectorDomain<'tcx> {}
 
-impl<'tcx> JoinSemiLattice for TypeTracker<'tcx> {
+impl<'tcx> JoinSemiLattice for CollectorDomain<'tcx> {
     fn join(&mut self, other: &Self) -> bool {
         let updated_places = other.places.iter().fold(false, |acc, (key, other_value)| {
             let self_value = self.places.get_mut(key).unwrap();
@@ -253,6 +221,13 @@ impl<'tcx> JoinSemiLattice for TypeTracker<'tcx> {
             let inserted = self.calls.insert(call_other.to_owned());
             inserted || updated
         });
-        updated_places || updated_calls
+        let updated_unhandled = other
+            .unhandled
+            .iter()
+            .fold(false, |updated, unhandled_other| {
+                let inserted = self.unhandled.insert(unhandled_other.to_owned());
+                inserted || updated
+            });
+        updated_places || updated_calls || updated_unhandled
     }
 }

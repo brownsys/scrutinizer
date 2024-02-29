@@ -1,4 +1,5 @@
 mod r#dyn;
+mod fn_ptr;
 mod foreign;
 mod lam;
 mod leaky;

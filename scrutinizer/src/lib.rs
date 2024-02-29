@@ -3,8 +3,7 @@
 
 mod analyzer;
 mod collector;
-mod util;
-mod vartrack;
+mod important;
 
 extern crate rustc_abi;
 extern crate rustc_borrowck;
@@ -19,29 +18,25 @@ extern crate rustc_mir_dataflow;
 extern crate rustc_span;
 extern crate rustc_trait_selection;
 
-use analyzer::{produce_result, ImportantLocals, PurityAnalysisResult};
+use analyzer::{run, PurityAnalysisResult};
+use collector::{structs::*, Collector};
+use important::ImportantLocals;
+
 use clap::Parser;
-use collector::{
-    ArgTys, Callee, ClosureInfoStorage, FnInfoStorage, TrackedTy, TypeCollector, VirtualStack,
-};
-use flowistry::indexed::impls::LocationOrArg;
-use flowistry::infoflow::Direction;
 use itertools::Itertools;
 use log::{error, trace};
+use regex::Regex;
 use rustc_hir::{ItemId, ItemKind};
-use rustc_middle::mir::{Local, Mutability, Place};
+use rustc_middle::mir::Mutability;
 use rustc_middle::ty;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
-use rustc_utils::PlaceExt;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::env;
 use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
-use vartrack::compute_dependent_locals;
 
 pub struct ScrutinizerPlugin;
 
@@ -222,13 +217,13 @@ fn analyze_item<'tcx>(
             let instance = ty::Instance::mono(tcx, def_id);
             trace!("current instance {:?}", &instance);
 
-            let fn_storage = Rc::new(RefCell::new(FnInfoStorage::new(instance)));
+            let fn_storage = Rc::new(RefCell::new(FunctionInfoStorage::new(instance)));
             let upvar_storage = Rc::new(RefCell::new(ClosureInfoStorage::new()));
             let virtual_stack = VirtualStack::new();
 
-            let current_fn = Callee::new_function(instance, ArgTys::new(arg_tys));
+            let current_fn = PartialFunctionInfo::new_function(instance, ArgTys::new(arg_tys));
 
-            let results = TypeCollector::new(
+            let results = Collector::new(
                 current_fn.clone(),
                 virtual_stack,
                 fn_storage.clone(),
@@ -237,15 +232,18 @@ fn analyze_item<'tcx>(
             )
             .run();
 
-            fn_storage.borrow_mut().add_with_body(
-                instance,
-                instance,
-                results.places().to_owned(),
-                results.calls().to_owned(),
-                body.to_owned(),
-                body.span,
-                results.unhandled().to_owned(),
-            );
+            let fn_info = {
+                let mut borrowed_storage = fn_storage.borrow_mut();
+                borrowed_storage.add_with_body(
+                    instance,
+                    instance,
+                    results.places().to_owned(),
+                    results.calls().to_owned(),
+                    body.to_owned(),
+                    body.span,
+                    results.unhandled().to_owned(),
+                )
+            };
 
             // Calculate important locals.
             let important_locals = {
@@ -257,24 +255,24 @@ fn analyze_item<'tcx>(
                 } else {
                     args.important_args.clone()
                 };
-                let targets = vec![important_args
-                    .iter()
-                    .map(|arg| {
-                        let arg_local = Local::from_usize(*arg);
-                        let arg_place = Place::make(arg_local, &[], tcx);
-                        return (arg_place, LocationOrArg::Arg(arg_local));
-                    })
-                    .collect_vec()];
-                ImportantLocals::new(HashSet::from_iter(
-                    compute_dependent_locals(tcx, def_id, targets, Direction::Forward).into_iter(),
-                ))
+                ImportantLocals::from_important_args(important_args, def_id, tcx)
             };
 
-            let dump = produce_result(
-                fn_storage,
+            let allowlist = vec![
+                Regex::new(r"core\[\w*\]::intrinsics").unwrap(),
+                Regex::new(r"core\[\w*\]::panicking").unwrap(),
+                Regex::new(r"alloc\[\w*\]::alloc").unwrap(),
+                Regex::new(r"chrono\[\w*\]::naive::datetime::\{impl#0\}::format").unwrap(),
+                Regex::new(r"alloc\[\w*\]::string::\{impl#41\}::to_string").unwrap(),
+            ];
+
+            let dump = run(
+                &fn_info,
+                fn_storage.clone(),
                 upvar_storage,
                 important_locals,
                 annotated_pure,
+                &allowlist,
                 tcx,
             );
             Some(dump)

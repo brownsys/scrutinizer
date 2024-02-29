@@ -1,24 +1,15 @@
 use rustc_hir::def_id::DefId;
-use serde::ser::{Serialize, SerializeStruct};
+use serde::{ser::SerializeStruct, Serialize};
 
-use super::important_locals::ImportantLocals;
-use crate::collector::{ClosureInfoStorage, FnInfo};
+use super::{ClosureInfoStorage, FunctionInfo, ImportantLocals};
 
-pub struct WithImportantLocals<'tcx> {
-    pub fn_info: FnInfo<'tcx>,
+#[derive(Serialize)]
+pub struct FunctionWithMetadata<'tcx> {
+    pub function: FunctionInfo<'tcx>,
     pub important_locals: ImportantLocals,
-}
-
-impl<'tcx> Serialize for WithImportantLocals<'tcx> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut state = serializer.serialize_struct("WithImportantLocals", 2)?;
-        state.serialize_field("fn_info", &self.fn_info)?;
-        state.serialize_field("important_locals", &self.important_locals)?;
-        state.end()
-    }
+    pub raw_pointer_deref: bool,
+    pub const_fn: bool,
+    pub whitelisted: bool,
 }
 
 pub struct PurityAnalysisResult<'tcx> {
@@ -26,8 +17,8 @@ pub struct PurityAnalysisResult<'tcx> {
     annotated_pure: bool,
     status: bool,
     reason: String,
-    passing: Vec<WithImportantLocals<'tcx>>,
-    failing: Vec<WithImportantLocals<'tcx>>,
+    passing: Vec<FunctionWithMetadata<'tcx>>,
+    failing: Vec<FunctionWithMetadata<'tcx>>,
     closures: ClosureInfoStorage<'tcx>,
 }
 
@@ -36,7 +27,7 @@ impl<'tcx> Serialize for PurityAnalysisResult<'tcx> {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("PurityAnalysisResult", 5)?;
+        let mut state = serializer.serialize_struct("PurityAnalysisResult", 7)?;
         state.serialize_field("def_id", format!("{:?}", self.def_id).as_str())?;
         state.serialize_field("annotated_pure", &self.annotated_pure)?;
         state.serialize_field("status", &self.status)?;
@@ -56,8 +47,8 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
         annotated_pure: bool,
         status: bool,
         reason: String,
-        passing: Vec<WithImportantLocals<'tcx>>,
-        failing: Vec<WithImportantLocals<'tcx>>,
+        passing: Vec<FunctionWithMetadata<'tcx>>,
+        failing: Vec<FunctionWithMetadata<'tcx>>,
         closures: ClosureInfoStorage<'tcx>,
     ) -> Self {
         Self {

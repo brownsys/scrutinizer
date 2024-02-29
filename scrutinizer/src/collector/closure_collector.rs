@@ -2,13 +2,13 @@ use rustc_middle::mir::visit::{TyContext, Visitor};
 use rustc_middle::mir::Body;
 use rustc_middle::ty::{Ty, TyCtxt};
 
-use super::callee::Callee;
-use super::closure_info::ClosureInfoStorageRef;
+use super::storage::ClosureInfoStorageRef;
+use super::structs::PartialFunctionInfo;
 
 struct ClosureCollector<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     closure_storage_ref: ClosureInfoStorageRef<'tcx>,
-    current_fn: &'a Callee<'tcx>,
+    current_fn: &'a PartialFunctionInfo<'tcx>,
 }
 
 pub trait CollectClosures<'tcx> {
@@ -16,7 +16,7 @@ pub trait CollectClosures<'tcx> {
         &self,
         tcx: TyCtxt<'tcx>,
         closure_info_storage_ref: ClosureInfoStorageRef<'tcx>,
-        current_fn: &Callee<'tcx>,
+        current_fn: &PartialFunctionInfo<'tcx>,
     );
 }
 
@@ -25,7 +25,7 @@ impl<'tcx> CollectClosures<'tcx> for Body<'tcx> {
         &self,
         tcx: TyCtxt<'tcx>,
         closure_storage_ref: ClosureInfoStorageRef<'tcx>,
-        current_fn: &Callee<'tcx>,
+        current_fn: &PartialFunctionInfo<'tcx>,
     ) {
         let mut closure_collector = ClosureCollector {
             tcx,
