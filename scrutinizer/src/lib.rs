@@ -262,8 +262,12 @@ fn analyze_item<'tcx>(
                 Regex::new(r"core\[\w*\]::intrinsics").unwrap(),
                 Regex::new(r"core\[\w*\]::panicking").unwrap(),
                 Regex::new(r"alloc\[\w*\]::alloc").unwrap(),
+                // Format chrono.
                 Regex::new(r"chrono\[\w*\]::naive::datetime::\{impl#0\}::format").unwrap(),
                 Regex::new(r"alloc\[\w*\]::string::\{impl#41\}::to_string").unwrap(),
+                // Rust 1.70.0 calls to memcmp to compare slices. 
+                // This is removed in further versions.
+                Regex::new(r"core\[\w*\]::slice::cmp::\{extern#0\}::memcmp").unwrap(),
             ];
 
             let dump = run(

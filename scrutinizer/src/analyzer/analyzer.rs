@@ -1,3 +1,4 @@
+use log::trace;
 use regex::Regex;
 use rustc_middle::ty::TyCtxt;
 
@@ -20,6 +21,13 @@ fn analyze_item<'tcx>(
 
     let is_whitelisted = {
         let def_path_str = format!("{:?}", item.def_id());
+        if let FunctionInfo::WithBody { instance, .. } = item {
+            trace!(
+                "def_path_str for {:?} is {:?}",
+                def_path_str,
+                tcx.def_path_str_with_substs(item.def_id(), instance.substs)
+            );
+        }
         allowlist.iter().any(|lib| lib.is_match(&def_path_str))
     };
 
@@ -67,7 +75,7 @@ fn analyze_item<'tcx>(
             })
             .unwrap_or(false);
 
-        if !has_unhandled_calls && !raw_pointer_deref && all_children_calls_pure {
+        if !has_unhandled_calls && !raw_pointer_deref && item.has_body() {
             let info_with_metadata = FunctionWithMetadata {
                 function: item.to_owned(),
                 important_locals: important_locals.clone(),
@@ -76,7 +84,6 @@ fn analyze_item<'tcx>(
                 whitelisted: is_whitelisted,
             };
             passing_calls_ref.push(info_with_metadata);
-            true
         } else {
             let info_with_metadata = FunctionWithMetadata {
                 function: item.to_owned(),
@@ -86,8 +93,9 @@ fn analyze_item<'tcx>(
                 whitelisted: is_whitelisted,
             };
             failing_calls_ref.push(info_with_metadata);
-            false
-        }
+        };
+
+        return !has_unhandled_calls && !raw_pointer_deref && all_children_calls_pure
     }
 }
 

@@ -42,6 +42,13 @@ impl<'tcx> FunctionInfo<'tcx> {
             _ => None,
         }
     }
+
+    pub fn has_body(&self) -> bool {
+        match self {
+            FunctionInfo::WithBody { .. } => true,
+            FunctionInfo::WithoutBody { .. } => false,
+        }
+    }
 }
 
 impl<'tcx> Eq for FunctionInfo<'tcx> {}
