@@ -34,7 +34,7 @@ fn analyze_item<'tcx>(
     let is_const_fn = tcx.is_const_fn_raw(item.def_id().to_owned());
     let has_no_important_locals = important_locals.is_empty();
 
-    if has_no_important_locals || is_const_fn || is_whitelisted {
+    if has_no_important_locals || is_whitelisted {
         let info_with_metadata = FunctionWithMetadata {
             function: item.to_owned(),
             important_locals: important_locals.clone(),

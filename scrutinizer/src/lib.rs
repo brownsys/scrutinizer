@@ -259,12 +259,28 @@ fn analyze_item<'tcx>(
             };
 
             let allowlist = vec![
-                Regex::new(r"core\[\w*\]::intrinsics").unwrap(),
+                // Safe intrinsics.
+                // Regex::new(r"core\[\w*\]::intrinsics").unwrap(),
+                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::arith_offset").unwrap(),
+                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::assert_inhabited").unwrap(),
+                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::ctlz_nonzero").unwrap(),
+                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::cttz_nonzero").unwrap(),
+                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::ctpop").unwrap(),
+                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::likely").unwrap(),
+                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::offset").unwrap(),
+                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::ptr_offset_from_unsigned").unwrap(),
+                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::rotate_left").unwrap(),
+                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::size_of_val").unwrap(),
+                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::unlikely").unwrap(),
+                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::unchecked_mul").unwrap(),
+                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::unchecked_sub").unwrap(),
                 Regex::new(r"core\[\w*\]::panicking").unwrap(),
                 Regex::new(r"alloc\[\w*\]::alloc").unwrap(),
                 // Format chrono.
                 Regex::new(r"chrono\[\w*\]::naive::datetime::\{impl#0\}::format").unwrap(),
                 Regex::new(r"alloc\[\w*\]::string::\{impl#41\}::to_string").unwrap(),
+                // Format strings.
+                Regex::new(r"alloc\[\w*\]::fmt::format").unwrap(),
                 // Rust 1.70.0 calls to memcmp to compare slices. 
                 // This is removed in further versions.
                 Regex::new(r"core\[\w*\]::slice::cmp::\{extern#0\}::memcmp").unwrap(),

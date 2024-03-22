@@ -1,3 +1,4 @@
+mod adversarial_intrinsic;
 mod r#dyn;
 mod fn_ptr;
 mod foreign;
