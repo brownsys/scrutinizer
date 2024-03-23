@@ -8,8 +8,8 @@ pub struct FunctionWithMetadata<'tcx> {
     pub function: FunctionInfo<'tcx>,
     pub important_locals: ImportantLocals,
     pub raw_pointer_deref: bool,
-    pub const_fn: bool,
     pub whitelisted: bool,
+    pub has_transmute: bool,
 }
 
 pub struct PurityAnalysisResult<'tcx> {

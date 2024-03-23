@@ -41,3 +41,33 @@ mod implicit {
         let sp = CustomSmartPointer { data };
     }
 }
+
+mod adversarial {
+    use std::ptr;
+
+    #[doc = "impure"]
+    unsafe fn intrinsic_leaker(value: &u64, sink: &u64) {
+        let sink = sink as *const u64;
+        ptr::copy(value as *const u64, sink as *mut u64, 1);
+    }
+
+    struct StructImmut<'a> {
+        field: &'a u32,
+    }
+    
+    struct StructMut<'a> {
+        field: &'a mut u32,
+    }
+    
+    #[doc = "impure"]
+    fn transmute_struct(value: u32, sink: StructImmut) {
+        let sink_mut: StructMut = unsafe { std::mem::transmute(sink) };
+        *sink_mut.field = value;
+    }
+
+    #[doc = "impure"]
+    fn transmute_arr(value: u32, sink: [&u32; 1]) {
+        let sink_mut: [&mut u32; 1] = unsafe { std::mem::transmute(sink) };
+        *sink_mut[0] = value;
+    }
+}

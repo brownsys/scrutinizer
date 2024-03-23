@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use log::trace;
 use regex::Regex;
 use rustc_middle::ty::TyCtxt;
@@ -5,6 +6,7 @@ use rustc_middle::ty::TyCtxt;
 use super::{
     raw_ptr::HasRawPtrDeref,
     result::{FunctionWithMetadata, PurityAnalysisResult},
+    transmute::HasTransmute,
     ClosureInfoStorageRef, FunctionInfo, FunctionInfoStorageRef, ImportantLocals,
 };
 
@@ -31,7 +33,6 @@ fn analyze_item<'tcx>(
         allowlist.iter().any(|lib| lib.is_match(&def_path_str))
     };
 
-    let is_const_fn = tcx.is_const_fn_raw(item.def_id().to_owned());
     let has_no_important_locals = important_locals.is_empty();
 
     if has_no_important_locals || is_whitelisted {
@@ -39,7 +40,7 @@ fn analyze_item<'tcx>(
             function: item.to_owned(),
             important_locals: important_locals.clone(),
             raw_pointer_deref: false,
-            const_fn: is_const_fn,
+            has_transmute: false,
             whitelisted: is_whitelisted,
         };
         passing_calls_ref.push(info_with_metadata);
@@ -55,32 +56,41 @@ fn analyze_item<'tcx>(
             _ => false,
         };
 
+        let has_transmute = match item {
+            FunctionInfo::WithBody { body, .. } => body.has_transmute(tcx),
+            _ => false,
+        };
+
         let all_children_calls_pure = item
             .calls()
             .and_then(|calls| {
-                Some(calls.iter().all(|call| {
-                    let new_important_locals =
-                        important_locals.transition(call.args(), call.def_id().to_owned(), tcx);
-                    let call_fn_info = borrowed_storage.get_by_call(call);
-                    analyze_item(
-                        call_fn_info,
-                        new_important_locals,
-                        passing_calls_ref,
-                        failing_calls_ref,
-                        storage.clone(),
-                        allowlist,
-                        tcx,
-                    )
-                }))
+                let children_results = calls
+                    .iter()
+                    .map(|call| {
+                        let new_important_locals =
+                            important_locals.transition(call.args(), call.def_id().to_owned(), tcx);
+                        let call_fn_info = borrowed_storage.get_by_call(call);
+                        analyze_item(
+                            call_fn_info,
+                            new_important_locals,
+                            passing_calls_ref,
+                            failing_calls_ref,
+                            storage.clone(),
+                            allowlist,
+                            tcx,
+                        )
+                    })
+                    .collect_vec();
+                Some(children_results.into_iter().all(|r| r))
             })
             .unwrap_or(false);
 
-        if !has_unhandled_calls && !raw_pointer_deref && item.has_body() {
+        if !has_unhandled_calls && !raw_pointer_deref && !has_transmute && item.has_body() {
             let info_with_metadata = FunctionWithMetadata {
                 function: item.to_owned(),
                 important_locals: important_locals.clone(),
                 raw_pointer_deref,
-                const_fn: is_const_fn,
+                has_transmute,
                 whitelisted: is_whitelisted,
             };
             passing_calls_ref.push(info_with_metadata);
@@ -89,13 +99,16 @@ fn analyze_item<'tcx>(
                 function: item.to_owned(),
                 important_locals: important_locals.clone(),
                 raw_pointer_deref,
-                const_fn: is_const_fn,
+                has_transmute,
                 whitelisted: is_whitelisted,
             };
             failing_calls_ref.push(info_with_metadata);
         };
 
-        return !has_unhandled_calls && !raw_pointer_deref && all_children_calls_pure
+        return !has_unhandled_calls
+            && !raw_pointer_deref
+            && !has_transmute
+            && all_children_calls_pure;
     }
 }
 

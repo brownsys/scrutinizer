@@ -119,7 +119,7 @@ impl<'tcx> Serialize for FunctionInfo<'tcx> {
                     serializer.serialize_struct_variant("FunctionInfo", 0, "WithBody", 6)?;
                 tv.serialize_field("parent", format!("{:?}", parent).as_str())?;
                 tv.serialize_field("instance", format!("{:?}", instance).as_str())?;
-                tv.serialize_field("places", &places)?;
+                // tv.serialize_field("places", &places)?;
                 tv.serialize_field("calls", calls)?;
                 tv.serialize_field("span", format!("{:?}", span).as_str())?;
                 tv.serialize_field(

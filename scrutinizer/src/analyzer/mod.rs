@@ -1,6 +1,7 @@
 mod analyzer;
 mod raw_ptr;
 mod result;
+mod transmute;
 
 pub use analyzer::run;
 pub use result::PurityAnalysisResult;
