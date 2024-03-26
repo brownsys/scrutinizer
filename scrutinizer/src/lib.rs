@@ -4,6 +4,7 @@
 mod analyzer;
 mod collector;
 mod important;
+mod input_adapters;
 
 extern crate rustc_abi;
 extern crate rustc_borrowck;
@@ -21,19 +22,22 @@ extern crate rustc_trait_selection;
 use analyzer::{run, PurityAnalysisResult};
 use collector::{structs::*, Collector};
 use important::ImportantLocals;
+use input_adapters::CollectPPRs;
 
 use clap::Parser;
 use itertools::Itertools;
 use log::{error, trace};
 use regex::Regex;
-use rustc_hir::{ItemId, ItemKind};
+use rustc_hir::{ConstContext, ItemId, ItemKind};
 use rustc_middle::mir::Mutability;
 use rustc_middle::ty;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
+use rustc_span::def_id::DefId;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::env;
+use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
@@ -43,18 +47,34 @@ pub struct ScrutinizerPlugin;
 // To parse CLI arguments, we use Clap.
 #[derive(Parser, Serialize, Deserialize)]
 pub struct ScrutinizerPluginArgs {
-    #[arg(short, long, default_value(""))]
-    function: String,
-    #[arg(short, long, num_args(0..), value_delimiter(','))]
-    important_args: Vec<usize>,
-    #[arg(short, long, default_value("analysis_results.json"))]
-    out_file: String,
-    #[arg(short, long)]
+    #[arg(short, long, default_value("config.toml"))]
+    config_path: String,
+}
+
+fn default_mode() -> String {
+    "functions".to_string()
+}
+
+fn default_output_file() -> String {
+    "analysis.result.json".to_string()
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Config {
+    #[serde(default = "default_mode")]
+    mode: String,
+    #[serde(default)]
     only_inconsistent: bool,
+    #[serde(default = "default_output_file")]
+    output_file: String,
+
+    target_filter: Option<String>,
+    important_args: Option<Vec<usize>>,
+    allowlist: Vec<String>,
 }
 
 impl RustcPlugin for ScrutinizerPlugin {
-    type Args = ScrutinizerPluginArgs;
+    type Args = Config;
 
     fn version(&self) -> Cow<'static, str> {
         env!("CARGO_PKG_VERSION").into()
@@ -66,8 +86,13 @@ impl RustcPlugin for ScrutinizerPlugin {
 
     fn args(&self, _target_dir: &Utf8Path) -> RustcPluginArgs<Self::Args> {
         let args = ScrutinizerPluginArgs::parse_from(env::args().skip(1));
+        let config =
+            toml::from_str(fs::read_to_string(args.config_path).unwrap().as_str()).unwrap();
         let filter = CrateFilter::AllCrates;
-        RustcPluginArgs { args, filter }
+        RustcPluginArgs {
+            args: config,
+            filter,
+        }
     }
 
     fn run(
@@ -82,7 +107,7 @@ impl RustcPlugin for ScrutinizerPlugin {
 }
 
 struct ScrutinizerCallbacks {
-    args: ScrutinizerPluginArgs,
+    args: Config,
 }
 
 impl rustc_driver::Callbacks for ScrutinizerCallbacks {
@@ -94,7 +119,7 @@ impl rustc_driver::Callbacks for ScrutinizerCallbacks {
         queries.global_ctxt().unwrap().enter(|tcx| {
             let result = scrutinizer(tcx, &self.args);
             let result_string = serde_json::to_string_pretty(&result).unwrap();
-            File::create(self.args.out_file.clone())
+            File::create(self.args.output_file.to_owned())
                 .and_then(|mut file| file.write_all(result_string.as_bytes()))
                 .unwrap();
         });
@@ -104,18 +129,166 @@ impl rustc_driver::Callbacks for ScrutinizerCallbacks {
 }
 
 // The entry point of analysis.
-fn scrutinizer<'tcx>(
+fn scrutinizer<'tcx>(tcx: ty::TyCtxt<'tcx>, args: &Config) -> Vec<PurityAnalysisResult<'tcx>> {
+    if args.mode == "function" {
+        tcx.hir()
+            .items()
+            .filter_map(|item_id| analyze_item(item_id, tcx, args))
+            .filter(|result| {
+                if args.only_inconsistent {
+                    result.is_inconsistent()
+                } else {
+                    true
+                }
+            })
+            .collect()
+    } else if args.mode == "ppr" {
+        tcx.mir_keys(())
+            .iter()
+            .map(
+                |def_id| match tcx.hir().body_const_context(def_id.to_owned()) {
+                    Some(ConstContext::ConstFn) | None => {
+                        analyze_pprs_in_body(def_id.to_def_id(), tcx, args)
+                    }
+                    Some(_) => vec![],
+                },
+            )
+            .flatten()
+            .collect()
+    } else {
+        panic!("undefined mode")
+    }
+}
+
+fn analyze_pprs_in_body<'tcx>(
+    def_id: DefId,
     tcx: ty::TyCtxt<'tcx>,
-    args: &ScrutinizerPluginArgs,
+    args: &Config,
 ) -> Vec<PurityAnalysisResult<'tcx>> {
-    tcx.hir()
-        .items()
-        .filter_map(|item_id| analyze_item(item_id, tcx, args))
-        .filter(|result| {
-            if args.only_inconsistent {
-                result.is_inconsistent()
+    let pprs = tcx.optimized_mir(def_id).collect_pprs(tcx);
+
+    pprs.into_iter()
+        .map(|ppr| {
+            if let ty::TyKind::Closure(def_id, substs_ref) = ppr.kind() {
+                // Retrieve the instance, as we know it exists.
+                let instance = ty::Instance::expect_resolve(
+                    tcx,
+                    ty::ParamEnv::reveal_all(),
+                    def_id.to_owned(),
+                    substs_ref,
+                );
+                trace!("current instance {:?}", &instance);
+
+                let def_id = instance.def_id();
+                let body = instance.subst_mir_and_normalize_erasing_regions(
+                    tcx,
+                    ty::ParamEnv::reveal_all(),
+                    tcx.instance_mir(instance.def).to_owned(),
+                );
+
+                // Create initial argument types.
+                let arg_tys = (1..=body.arg_count)
+                    .map(|local| {
+                        let arg_ty = body.local_decls[local.into()].ty;
+                        TrackedTy::from_ty(arg_ty)
+                    })
+                    .collect_vec();
+
+                // Check for unresolved generic types or consts.
+                let contains_unresolved_generics = arg_tys.iter().any(|arg| match arg {
+                    TrackedTy::Present(..) => false,
+                    TrackedTy::Erased(..) => true,
+                });
+
+                if contains_unresolved_generics {
+                    return PurityAnalysisResult::new(
+                        def_id,
+                        true,
+                        false,
+                        String::from("erased args detected"),
+                        vec![],
+                        vec![],
+                        ClosureInfoStorage::new(),
+                    );
+                }
+
+                // Check for mutable arguments.
+                let contains_mutable_args = arg_tys.iter().any(|arg| {
+                    let main_ty = match arg {
+                        TrackedTy::Present(ty) => ty,
+                        TrackedTy::Erased(..) => unreachable!(),
+                    };
+                    if let ty::TyKind::Ref(.., mutbl) = main_ty.kind() {
+                        return mutbl.to_owned() == Mutability::Mut;
+                    } else {
+                        return false;
+                    }
+                });
+
+                if contains_mutable_args {
+                    return PurityAnalysisResult::new(
+                        def_id,
+                        true,
+                        false,
+                        String::from("mutable arguments detected"),
+                        vec![],
+                        vec![],
+                        ClosureInfoStorage::new(),
+                    );
+                }
+
+                let fn_storage = Rc::new(RefCell::new(FunctionInfoStorage::new(instance)));
+                let upvar_storage = Rc::new(RefCell::new(ClosureInfoStorage::new()));
+                let virtual_stack = VirtualStack::new();
+
+                let current_fn = PartialFunctionInfo::new_function(instance, ArgTys::new(arg_tys));
+
+                let results = Collector::new(
+                    current_fn.clone(),
+                    virtual_stack,
+                    fn_storage.clone(),
+                    upvar_storage.clone(),
+                    tcx,
+                )
+                .run();
+
+                let fn_info = {
+                    let mut borrowed_storage = fn_storage.borrow_mut();
+                    borrowed_storage.add_with_body(
+                        instance,
+                        instance,
+                        results.places().to_owned(),
+                        results.calls().to_owned(),
+                        body.to_owned(),
+                        body.span,
+                        results.unhandled().to_owned(),
+                    )
+                };
+
+                // Calculate important locals.
+                let important_locals = {
+                    // Parse important arguments.
+                    let important_args = vec![2];
+                    ImportantLocals::from_important_args(important_args, def_id, tcx)
+                };
+
+                let allowlist = args
+                    .allowlist
+                    .iter()
+                    .map(|re| Regex::new(re).unwrap())
+                    .collect();
+
+                run(
+                    &fn_info,
+                    fn_storage.clone(),
+                    upvar_storage,
+                    important_locals,
+                    true,
+                    &allowlist,
+                    tcx,
+                )
             } else {
-                true
+                panic!("passed a non-closure to ppr constructor");
             }
         })
         .collect()
@@ -124,7 +297,7 @@ fn scrutinizer<'tcx>(
 fn analyze_item<'tcx>(
     item_id: ItemId,
     tcx: ty::TyCtxt<'tcx>,
-    args: &ScrutinizerPluginArgs,
+    args: &Config,
 ) -> Option<PurityAnalysisResult<'tcx>> {
     let hir = tcx.hir();
     let item = hir.item(item_id);
@@ -136,8 +309,10 @@ fn analyze_item<'tcx>(
         .unwrap_or(false);
 
     // Find the desired function by name.
-    if args.function.as_str().is_empty()
-        || tcx.def_path_str(def_id).contains(args.function.as_str())
+    if args.target_filter.is_none()
+        || tcx
+            .def_path_str(def_id)
+            .contains(args.target_filter.as_ref().unwrap().as_str())
     {
         if let ItemKind::Fn(fn_sig, ..) = &item.kind {
             // Retrieve body.
@@ -248,49 +423,21 @@ fn analyze_item<'tcx>(
             // Calculate important locals.
             let important_locals = {
                 // Parse important arguments.
-                let important_args = if args.important_args.is_empty() {
+                let important_args = if args.important_args.is_none() {
                     // If no important arguments are provided, assume all are important.
                     let n_args = fn_sig.decl.inputs.len();
                     (1..=n_args).collect()
                 } else {
-                    args.important_args.clone()
+                    args.important_args.as_ref().unwrap().to_owned()
                 };
                 ImportantLocals::from_important_args(important_args, def_id, tcx)
             };
 
-            let allowlist = vec![
-                // Safe intrinsics.
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::arith_offset").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::assert_inhabited").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::ctlz_nonzero").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::cttz_nonzero").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::ctpop").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::exact_div").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::likely").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::offset").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::ptr_offset_from_unsigned").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::rotate_left").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::saturating_add").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::size_of_val").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::unlikely").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::unchecked_add").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::unchecked_mul").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::unchecked_rem").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::unchecked_shr").unwrap(),
-                Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::unchecked_sub").unwrap(),
-                // Panicking and allocating infrastructure.
-                Regex::new(r"core\[\w*\]::panicking").unwrap(),
-                Regex::new(r"alloc\[\w*\]::alloc").unwrap(),
-                // Format chrono.
-                Regex::new(r"chrono\[\w*\]::naive::datetime::\{impl#0\}::format").unwrap(),
-                Regex::new(r"alloc\[\w*\]::string::\{impl#41\}::to_string").unwrap(),
-                Regex::new(r"core\[\w*\]::fmt::\{impl#3\}::new").unwrap(),
-                // Format strings.
-                Regex::new(r"alloc\[\w*\]::fmt::format").unwrap(),
-                // Rust 1.70.0 calls to memcmp to compare slices. 
-                // This is removed in further versions.
-                Regex::new(r"core\[\w*\]::slice::cmp::\{extern#0\}::memcmp").unwrap(),
-            ];
+            let allowlist = args
+                .allowlist
+                .iter()
+                .map(|re| Regex::new(re).unwrap())
+                .collect();
 
             let dump = run(
                 &fn_info,

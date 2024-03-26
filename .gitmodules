@@ -1,0 +1,3 @@
+[submodule "Alohomora"]
+	path = Alohomora
+	url = git@github.com:brownsys/Alohomora.git

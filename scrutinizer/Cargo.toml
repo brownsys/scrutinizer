@@ -22,6 +22,7 @@ regex = "1.9.1"
 serde = {version = "1", features = ["derive"]}
 serde_json = "1.0"
 textwrap = {version = "0.14", default-features = false}
+toml = "0.8.12"
 
 # polonius-specific dependencies
 polonius-engine = "=0.13.0"

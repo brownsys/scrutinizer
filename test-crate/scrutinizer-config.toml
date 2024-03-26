@@ -1,0 +1,37 @@
+mode = "function"
+only_inconsistent = false
+target_filter = "websubmit"
+output_file = "websubmit.result.json"
+allowlist = [
+  # Safe intrinsics.
+  'core\[\w*\]::intrinsics::\{extern#0\}::arith_offset',
+  'core\[\w*\]::intrinsics::\{extern#0\}::assert_inhabited',
+  'core\[\w*\]::intrinsics::\{extern#0\}::ctlz_nonzero',
+  'core\[\w*\]::intrinsics::\{extern#0\}::cttz_nonzero',
+  'core\[\w*\]::intrinsics::\{extern#0\}::ctpop',
+  'core\[\w*\]::intrinsics::\{extern#0\}::exact_div',
+  'core\[\w*\]::intrinsics::\{extern#0\}::likely',
+  'core\[\w*\]::intrinsics::\{extern#0\}::offset',
+  'core\[\w*\]::intrinsics::\{extern#0\}::ptr_offset_from_unsigned',
+  'core\[\w*\]::intrinsics::\{extern#0\}::rotate_left',
+  'core\[\w*\]::intrinsics::\{extern#0\}::saturating_add',
+  'core\[\w*\]::intrinsics::\{extern#0\}::size_of_val',
+  'core\[\w*\]::intrinsics::\{extern#0\}::unlikely',
+  'core\[\w*\]::intrinsics::\{extern#0\}::unchecked_add',
+  'core\[\w*\]::intrinsics::\{extern#0\}::unchecked_mul',
+  'core\[\w*\]::intrinsics::\{extern#0\}::unchecked_rem',
+  'core\[\w*\]::intrinsics::\{extern#0\}::unchecked_shr',
+  'core\[\w*\]::intrinsics::\{extern#0\}::unchecked_sub',
+  # Panicking and allocating infrastructure.
+  'core\[\w*\]::panicking',
+  'alloc\[\w*\]::alloc',
+  # Format chrono.
+  'chrono\[\w*\]::naive::datetime::\{impl#0\}::format',
+  'alloc\[\w*\]::string::\{impl#41\}::to_string',
+  'core\[\w*\]::fmt::\{impl#3\}::new',
+  # Format strings.
+  'alloc\[\w*\]::fmt::format',
+  # Rust 1.70.0 calls to memcmp to compare slices.
+  # This is removed in further versions.
+  'core\[\w*\]::slice::cmp::\{extern#0\}::memcmp',
+]

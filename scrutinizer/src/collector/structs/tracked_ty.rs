@@ -77,7 +77,7 @@ impl<'tcx> TrackedTy<'tcx> {
                         .map(|v| TrackedTy::Erased(HashSet::from_iter(v.into_iter())))
                         .collect_vec()
                 } else {
-                    vec![]
+                    vec![self.to_owned()]
                 }
             }
         }
