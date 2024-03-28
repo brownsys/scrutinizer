@@ -15,7 +15,7 @@ allowlist = [
   'core\[\w*\]::intrinsics::\{extern#0\}::assume',
   'core\[\w*\]::intrinsics::\{extern#0\}::black_box',
 
-  'core\[\w*\]::intrinsics::\{extern#0\}::Breakpoint.',
+  # Breakpoint.
   'core\[\w*\]::intrinsics::\{extern#0\}::breakpoint',
 
   # size_of and others.
