@@ -109,7 +109,7 @@ impl<'tcx> Serialize for FunctionInfo<'tcx> {
             FunctionInfo::WithBody {
                 ref parent,
                 ref instance,
-                ref places,
+                // ref places,
                 ref calls,
                 ref span,
                 ref unhandled,

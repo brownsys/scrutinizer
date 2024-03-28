@@ -2,7 +2,6 @@ use itertools::Itertools;
 use log::trace;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{self, TyCtxt};
-use rustc_utils::BodyExt;
 
 use super::arg_tys::ArgTys;
 use super::HasArgTys;
@@ -82,13 +81,6 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
         };
         let provided_args = instance.arg_tys(tcx);
         let merged_arg_tys = ArgTys::merge(inferred_args, provided_args);
-        if let ty::InstanceDef::ClosureOnceShim { .. } = instance.def {
-            std::fs::write(
-                "once.rs",
-                tcx.instance_mir(instance.def).to_string(tcx).unwrap(),
-            )
-            .unwrap();
-        }
         if tcx.is_closure(instance.def_id()) {
             match closure_info_storage.borrow().get(&instance.def_id()) {
                 Some(closure_info) => PartialFunctionInfo::new_closure(
