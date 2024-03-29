@@ -1,7 +1,8 @@
 use rustc_middle::ty::{self, Ty, TyCtxt};
 
-use super::TrackedTy;
+use crate::common::TrackedTy;
 
+// TODO: ideally, fields here should be private.
 #[derive(Clone, Debug)]
 pub struct ClosureInfo<'tcx> {
     pub with_substs: Ty<'tcx>,

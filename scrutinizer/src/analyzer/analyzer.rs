@@ -1,48 +1,39 @@
 use itertools::Itertools;
-use log::trace;
 use regex::Regex;
 use rustc_middle::ty::TyCtxt;
 
-use super::{
-    raw_ptr::HasRawPtrDeref,
+use crate::analyzer::{
+    heuristics::{HasRawPtrDeref, HasTransmute},
     result::{FunctionWithMetadata, PurityAnalysisResult},
-    transmute::HasTransmute,
-    ClosureInfoStorageRef, FunctionInfo, FunctionInfoStorageRef, ImportantLocals,
 };
+use crate::common::storage::{ClosureInfoStorage, FunctionInfoStorage};
+use crate::common::FunctionInfo;
+use crate::important::ImportantLocals;
 
 fn analyze_item<'tcx>(
     item: &FunctionInfo<'tcx>,
     important_locals: ImportantLocals,
     passing_calls_ref: &mut Vec<FunctionWithMetadata<'tcx>>,
     failing_calls_ref: &mut Vec<FunctionWithMetadata<'tcx>>,
-    storage: FunctionInfoStorageRef<'tcx>,
+    storage: &FunctionInfoStorage<'tcx>,
     allowlist: &Vec<Regex>,
     tcx: TyCtxt<'tcx>,
 ) -> bool {
-    let borrowed_storage = storage.borrow();
-
-    let is_whitelisted = {
+    let is_allowlisted = {
         let def_path_str = format!("{:?}", item.def_id());
-        if let FunctionInfo::WithBody { instance, .. } = item {
-            trace!(
-                "def_path_str for {:?} is {:?}",
-                def_path_str,
-                tcx.def_path_str_with_substs(item.def_id(), instance.substs)
-            );
-        }
         allowlist.iter().any(|lib| lib.is_match(&def_path_str))
     };
 
     let has_no_important_locals = important_locals.is_empty();
 
-    if has_no_important_locals || is_whitelisted {
-        let info_with_metadata = FunctionWithMetadata {
-            function: item.to_owned(),
-            important_locals: important_locals.clone(),
-            raw_pointer_deref: false,
-            has_transmute: false,
-            whitelisted: is_whitelisted,
-        };
+    if has_no_important_locals || is_allowlisted {
+        let info_with_metadata = FunctionWithMetadata::new(
+            item.to_owned(),
+            important_locals.clone(),
+            false,
+            false,
+            is_allowlisted,
+        );
         passing_calls_ref.push(info_with_metadata);
         true
     } else {
@@ -51,7 +42,7 @@ fn analyze_item<'tcx>(
             _ => false,
         };
 
-        let raw_pointer_deref = match item {
+        let has_raw_pointer_deref = match item {
             FunctionInfo::WithBody { body, .. } => body.has_raw_ptr_deref(tcx),
             _ => false,
         };
@@ -61,7 +52,7 @@ fn analyze_item<'tcx>(
             _ => false,
         };
 
-        let all_children_calls_pure = item
+        let has_no_leaking_calls = item
             .calls()
             .and_then(|calls| {
                 let children_results = calls
@@ -69,13 +60,13 @@ fn analyze_item<'tcx>(
                     .map(|call| {
                         let new_important_locals =
                             important_locals.transition(call.args(), call.def_id().to_owned(), tcx);
-                        let call_fn_info = borrowed_storage.get_by_call(call);
+                        let call_fn_info = storage.get_by_call(call);
                         analyze_item(
                             call_fn_info,
                             new_important_locals,
                             passing_calls_ref,
                             failing_calls_ref,
-                            storage.clone(),
+                            storage,
                             allowlist,
                             tcx,
                         )
@@ -85,43 +76,42 @@ fn analyze_item<'tcx>(
             })
             .unwrap_or(false);
 
-        if !has_unhandled_calls && !raw_pointer_deref && !has_transmute && item.has_body() {
-            let info_with_metadata = FunctionWithMetadata {
-                function: item.to_owned(),
-                important_locals: important_locals.clone(),
-                raw_pointer_deref,
+        if !has_unhandled_calls && !has_raw_pointer_deref && !has_transmute && item.has_body() {
+            let info_with_metadata = FunctionWithMetadata::new(
+                item.to_owned(),
+                important_locals.clone(),
+                has_raw_pointer_deref,
                 has_transmute,
-                whitelisted: is_whitelisted,
-            };
+                is_allowlisted,
+            );
             passing_calls_ref.push(info_with_metadata);
         } else {
-            let info_with_metadata = FunctionWithMetadata {
-                function: item.to_owned(),
-                important_locals: important_locals.clone(),
-                raw_pointer_deref,
+            let info_with_metadata = FunctionWithMetadata::new(
+                item.to_owned(),
+                important_locals.clone(),
+                has_raw_pointer_deref,
                 has_transmute,
-                whitelisted: is_whitelisted,
-            };
+                is_allowlisted,
+            );
             failing_calls_ref.push(info_with_metadata);
         };
 
         return !has_unhandled_calls
-            && !raw_pointer_deref
+            && !has_raw_pointer_deref
             && !has_transmute
-            && all_children_calls_pure;
+            && has_no_leaking_calls;
     }
 }
 
 pub fn run<'tcx>(
-    origin: &FunctionInfo<'tcx>,
-    functions: FunctionInfoStorageRef<'tcx>,
-    closures: ClosureInfoStorageRef<'tcx>,
+    functions: FunctionInfoStorage<'tcx>,
+    closures: ClosureInfoStorage<'tcx>,
     important_locals: ImportantLocals,
     annotated_pure: bool,
     allowlist: &Vec<Regex>,
     tcx: TyCtxt<'tcx>,
 ) -> PurityAnalysisResult<'tcx> {
-    let borrowed_functions = functions.borrow();
+    let origin = functions.get_with_body(functions.origin()).unwrap();
 
     let mut passing_calls = vec![];
     let mut failing_calls = vec![];
@@ -131,30 +121,30 @@ pub fn run<'tcx>(
         important_locals,
         &mut passing_calls,
         &mut failing_calls,
-        functions.clone(),
+        &functions,
         allowlist,
         tcx,
     );
 
     if pure {
         PurityAnalysisResult::new(
-            borrowed_functions.origin().def_id(),
+            functions.origin().def_id(),
             annotated_pure,
             true,
             String::new(),
             passing_calls,
             failing_calls,
-            closures.borrow().to_owned(),
+            closures,
         )
     } else {
         PurityAnalysisResult::new(
-            borrowed_functions.origin().def_id(),
+            functions.origin().def_id(),
             annotated_pure,
             false,
             String::from("unable to ascertain purity of inner function call"),
             passing_calls,
             failing_calls,
-            closures.borrow().to_owned(),
+            closures,
         )
     }
 }

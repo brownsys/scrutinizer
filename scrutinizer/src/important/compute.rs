@@ -1,7 +1,7 @@
-use super::facts::LocalFacts;
-use super::intern::InternerTables;
-use super::location_table::LocationTableShim;
-use super::tab_delim::load_tab_delimited_facts;
+use crate::important::facts::LocalFacts;
+use crate::important::intern::InternerTables;
+use crate::important::location_table::LocationTableShim;
+use crate::important::tab_delim::load_tab_delimited_facts;
 
 use rustc_borrowck::BodyWithBorrowckFacts;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};

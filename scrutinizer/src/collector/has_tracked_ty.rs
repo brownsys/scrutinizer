@@ -3,9 +3,9 @@ use rustc_middle::mir::{AggregateKind, BinOp, CastKind, NullOp, Operand, Place, 
 use rustc_middle::ty::{self, TyCtxt};
 use std::collections::HashSet;
 
-use super::collector_domain::CollectorDomain;
-use super::storage::ClosureInfoStorageRef;
-use super::structs::{NormalizedPlace, TrackedTy};
+use crate::collector::collector_domain::CollectorDomain;
+use crate::common::storage::ClosureInfoStorageRef;
+use crate::common::{NormalizedPlace, TrackedTy};
 
 pub trait HasTrackedTy<'tcx> {
     fn tracked_ty(
@@ -255,7 +255,7 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                         .collect_vec();
                     closure_info_storage
                         .borrow_mut()
-                        .try_resolve_and_insert(closure_ty, instance, upvar_tys, tcx);
+                        .update_with(closure_ty, instance, upvar_tys, tcx);
                     TrackedTy::from_ty(closure_ty)
                 }
                 AggregateKind::Generator(..) => {

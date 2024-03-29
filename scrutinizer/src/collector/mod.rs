@@ -3,9 +3,6 @@ mod collector;
 mod collector_domain;
 mod dataflow_shim;
 mod has_tracked_ty;
-
-pub mod storage;
-pub mod structs;
-pub mod traits;
+mod structs;
 
 pub use collector::Collector;

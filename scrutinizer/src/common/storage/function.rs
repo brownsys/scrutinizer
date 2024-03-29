@@ -1,11 +1,9 @@
-use rustc_middle::mir::Body;
-use rustc_middle::ty::{self, Ty};
-use rustc_span::{def_id::DefId, Span};
+use rustc_middle::ty;
+use rustc_span::def_id::DefId;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use super::{FunctionCall, FunctionInfo, NormalizedPlace, TrackedTy};
+use crate::common::{FunctionCall, FunctionInfo};
 
 pub type FunctionInfoStorageRef<'tcx> = Rc<RefCell<FunctionInfoStorage<'tcx>>>;
 
@@ -23,46 +21,10 @@ impl<'tcx> FunctionInfoStorage<'tcx> {
         }
     }
 
-    pub fn add_with_body(
-        &mut self,
-        parent: ty::Instance<'tcx>,
-        instance: ty::Instance<'tcx>,
-        places: HashMap<NormalizedPlace<'tcx>, TrackedTy<'tcx>>,
-        calls: HashSet<FunctionCall<'tcx>>,
-        body: Body<'tcx>,
-        span: Span,
-        unhandled: HashSet<Ty<'tcx>>,
-    ) -> FunctionInfo<'tcx> {
-        let fn_info = FunctionInfo::WithBody {
-            parent,
-            instance,
-            places,
-            calls,
-            body,
-            span,
-            unhandled,
-        };
-        if !self.fns.contains(&fn_info) {
-            self.fns.push(fn_info.clone());
+    pub fn insert(&mut self, function_info: FunctionInfo<'tcx>) {
+        if !self.fns.contains(&function_info) {
+            self.fns.push(function_info.clone());
         }
-        fn_info
-    }
-
-    pub fn add_without_body(
-        &mut self,
-        parent: ty::Instance<'tcx>,
-        def_id: DefId,
-        tracked_args: Vec<TrackedTy<'tcx>>,
-    ) -> FunctionInfo<'tcx> {
-        let fn_info = FunctionInfo::WithoutBody {
-            parent,
-            def_id,
-            tracked_args,
-        };
-        if !self.fns.contains(&fn_info) {
-            self.fns.push(fn_info.clone());
-        }
-        fn_info
     }
 
     pub fn get_with_body(&self, instance: &ty::Instance<'tcx>) -> Option<&FunctionInfo<'tcx>> {

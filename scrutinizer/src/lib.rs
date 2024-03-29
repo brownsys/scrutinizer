@@ -3,8 +3,10 @@
 
 mod analyzer;
 mod collector;
+mod common;
 mod important;
-mod input_adapters;
+mod precheck;
+mod selector;
 
 extern crate rustc_abi;
 extern crate rustc_borrowck;
@@ -19,40 +21,39 @@ extern crate rustc_mir_dataflow;
 extern crate rustc_span;
 extern crate rustc_trait_selection;
 
-use analyzer::{run, PurityAnalysisResult};
-use collector::{structs::*, Collector};
+use analyzer::PurityAnalysisResult;
+use collector::Collector;
 use important::ImportantLocals;
-use input_adapters::CollectPPRs;
+use precheck::precheck;
+use selector::{select_functions, select_pprs};
 
 use clap::Parser;
-use itertools::Itertools;
-use log::{error, trace};
+use log::trace;
 use regex::Regex;
-use rustc_hir::{ConstContext, ItemId, ItemKind};
-use rustc_middle::mir::Mutability;
 use rustc_middle::ty;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
-use rustc_span::def_id::DefId;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::env;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
-use std::rc::Rc;
 
 pub struct ScrutinizerPlugin;
 
 // To parse CLI arguments, we use Clap.
 #[derive(Parser, Serialize, Deserialize)]
 pub struct ScrutinizerPluginArgs {
-    #[arg(short, long, default_value("config.toml"))]
+    #[arg(short, long, default_value("scrutinizer-config.toml"))]
     config_path: String,
 }
 
 fn default_mode() -> String {
     "functions".to_string()
+}
+
+fn default_only_inconsistent() -> bool {
+    false
 }
 
 fn default_output_file() -> String {
@@ -63,14 +64,14 @@ fn default_output_file() -> String {
 pub struct Config {
     #[serde(default = "default_mode")]
     mode: String,
-    #[serde(default)]
+    #[serde(default = "default_only_inconsistent")]
     only_inconsistent: bool,
     #[serde(default = "default_output_file")]
     output_file: String,
 
     target_filter: Option<String>,
     important_args: Option<Vec<usize>>,
-    allowlist: Vec<String>,
+    allowlist: Option<Vec<String>>,
 }
 
 impl RustcPlugin for ScrutinizerPlugin {
@@ -130,329 +131,86 @@ impl rustc_driver::Callbacks for ScrutinizerCallbacks {
 
 // The entry point of analysis.
 fn scrutinizer<'tcx>(tcx: ty::TyCtxt<'tcx>, args: &Config) -> Vec<PurityAnalysisResult<'tcx>> {
-    if args.mode == "function" {
-        tcx.hir()
-            .items()
-            .filter_map(|item_id| analyze_item(item_id, tcx, args))
-            .filter(|result| {
-                if args.only_inconsistent {
-                    result.is_inconsistent()
-                } else {
-                    true
-                }
-            })
-            .collect()
+    let instances = if args.mode == "function" {
+        select_functions(tcx)
     } else if args.mode == "ppr" {
-        tcx.mir_keys(())
-            .iter()
-            .map(
-                |def_id| match tcx.hir().body_const_context(def_id.to_owned()) {
-                    Some(ConstContext::ConstFn) | None => {
-                        analyze_pprs_in_body(def_id.to_def_id(), tcx, args)
-                    }
-                    Some(_) => vec![],
-                },
-            )
-            .flatten()
-            .collect()
+        select_pprs(tcx)
     } else {
         panic!("undefined mode")
-    }
-}
+    };
 
-fn analyze_pprs_in_body<'tcx>(
-    def_id: DefId,
-    tcx: ty::TyCtxt<'tcx>,
-    args: &Config,
-) -> Vec<PurityAnalysisResult<'tcx>> {
-    let pprs = tcx.optimized_mir(def_id).collect_pprs(tcx);
-
-    pprs.into_iter()
-        .map(|ppr| {
-            if let ty::TyKind::Closure(def_id, substs_ref) = ppr.kind() {
-                // Retrieve the instance, as we know it exists.
-                let instance = ty::Instance::expect_resolve(
-                    tcx,
-                    ty::ParamEnv::reveal_all(),
-                    def_id.to_owned(),
-                    substs_ref,
-                );
-                trace!("current instance {:?}", &instance);
-
-                let def_id = instance.def_id();
-                let body = instance.subst_mir_and_normalize_erasing_regions(
-                    tcx,
-                    ty::ParamEnv::reveal_all(),
-                    tcx.instance_mir(instance.def).to_owned(),
-                );
-
-                // Create initial argument types.
-                let arg_tys = (1..=body.arg_count)
-                    .map(|local| {
-                        let arg_ty = body.local_decls[local.into()].ty;
-                        TrackedTy::from_ty(arg_ty)
-                    })
-                    .collect_vec();
-
-                // Check for unresolved generic types or consts.
-                let contains_unresolved_generics = arg_tys.iter().any(|arg| match arg {
-                    TrackedTy::Present(..) => false,
-                    TrackedTy::Erased(..) => true,
-                });
-
-                if contains_unresolved_generics {
-                    return PurityAnalysisResult::new(
-                        def_id,
-                        true,
-                        false,
-                        String::from("erased args detected"),
-                        vec![],
-                        vec![],
-                        ClosureInfoStorage::new(),
-                    );
-                }
-
-                // Check for mutable arguments.
-                let contains_mutable_args = arg_tys.iter().any(|arg| {
-                    let main_ty = match arg {
-                        TrackedTy::Present(ty) => ty,
-                        TrackedTy::Erased(..) => unreachable!(),
-                    };
-                    if let ty::TyKind::Ref(.., mutbl) = main_ty.kind() {
-                        return mutbl.to_owned() == Mutability::Mut;
-                    } else {
-                        return false;
-                    }
-                });
-
-                if contains_mutable_args {
-                    return PurityAnalysisResult::new(
-                        def_id,
-                        true,
-                        false,
-                        String::from("mutable arguments detected"),
-                        vec![],
-                        vec![],
-                        ClosureInfoStorage::new(),
-                    );
-                }
-
-                let fn_storage = Rc::new(RefCell::new(FunctionInfoStorage::new(instance)));
-                let upvar_storage = Rc::new(RefCell::new(ClosureInfoStorage::new()));
-                let virtual_stack = VirtualStack::new();
-
-                let current_fn = PartialFunctionInfo::new_function(instance, ArgTys::new(arg_tys));
-
-                let results = Collector::new(
-                    current_fn.clone(),
-                    virtual_stack,
-                    fn_storage.clone(),
-                    upvar_storage.clone(),
-                    tcx,
-                )
-                .run();
-
-                let fn_info = {
-                    let mut borrowed_storage = fn_storage.borrow_mut();
-                    borrowed_storage.add_with_body(
-                        instance,
-                        instance,
-                        results.places().to_owned(),
-                        results.calls().to_owned(),
-                        body.to_owned(),
-                        body.span,
-                        results.unhandled().to_owned(),
-                    )
-                };
-
-                // Calculate important locals.
-                let important_locals = {
-                    // Parse important arguments.
-                    let important_args = vec![2];
-                    ImportantLocals::from_important_args(important_args, def_id, tcx)
-                };
-
-                let allowlist = args
-                    .allowlist
-                    .iter()
-                    .map(|re| Regex::new(re).unwrap())
-                    .collect();
-
-                run(
-                    &fn_info,
-                    fn_storage.clone(),
-                    upvar_storage,
-                    important_locals,
-                    true,
-                    &allowlist,
-                    tcx,
-                )
+    instances
+        .into_iter()
+        .filter(|(instance, _)| {
+            args.target_filter.is_none()
+                || tcx
+                    .def_path_str(instance.def_id())
+                    .contains(args.target_filter.as_ref().unwrap().as_str())
+        })
+        .map(|(instance, annotated_pure)| analyze_instance(instance, annotated_pure, tcx, args))
+        .filter(|result| {
+            if args.only_inconsistent {
+                result.is_inconsistent()
             } else {
-                panic!("passed a non-closure to ppr constructor");
+                true
             }
         })
         .collect()
 }
 
-fn analyze_item<'tcx>(
-    item_id: ItemId,
+fn analyze_instance<'tcx>(
+    instance: ty::Instance<'tcx>,
+    annotated_pure: bool,
     tcx: ty::TyCtxt<'tcx>,
     args: &Config,
-) -> Option<PurityAnalysisResult<'tcx>> {
-    let hir = tcx.hir();
-    let item = hir.item(item_id);
-    let def_id = item.owner_id.to_def_id();
-    let annotated_pure = tcx
-        .get_attr(def_id, rustc_span::symbol::Symbol::intern("doc"))
-        .and_then(|attr| attr.doc_str())
-        .and_then(|symbol| Some(symbol == rustc_span::symbol::Symbol::intern("pure")))
-        .unwrap_or(false);
+) -> PurityAnalysisResult<'tcx> {
+    trace!("started analyzing instance {:?}", &instance);
 
-    // Find the desired function by name.
-    if args.target_filter.is_none()
-        || tcx
-            .def_path_str(def_id)
-            .contains(args.target_filter.as_ref().unwrap().as_str())
-    {
-        if let ItemKind::Fn(fn_sig, ..) = &item.kind {
-            // Retrieve body.
-            let body = tcx.optimized_mir(def_id);
+    let def_id = instance.def_id();
 
-            // Create initial argument types.
-            let arg_tys = (1..=body.arg_count)
-                .map(|local| {
-                    let arg_ty = body.local_decls[local.into()].ty;
-                    TrackedTy::from_ty(arg_ty)
-                })
-                .collect_vec();
-
-            // Check for unresolved generic types or consts.
-            let contains_unresolved_generics = arg_tys.iter().any(|arg| match arg {
-                TrackedTy::Present(..) => false,
-                TrackedTy::Erased(..) => true,
-            });
-
-            if contains_unresolved_generics {
-                return Some(PurityAnalysisResult::new(
-                    def_id,
-                    annotated_pure,
-                    false,
-                    String::from("unresolved generics detected"),
-                    vec![],
-                    vec![],
-                    ClosureInfoStorage::new(),
-                ));
-            }
-
-            // Check for mutable arguments.
-            let contains_mutable_args = arg_tys.iter().any(|arg| {
-                let main_ty = match arg {
-                    TrackedTy::Present(ty) => ty,
-                    TrackedTy::Erased(..) => unreachable!(),
-                };
-                if let ty::TyKind::Ref(.., mutbl) = main_ty.kind() {
-                    return mutbl.to_owned() == Mutability::Mut;
-                } else {
-                    return false;
-                }
-            });
-
-            if contains_mutable_args {
-                return Some(PurityAnalysisResult::new(
-                    def_id,
-                    annotated_pure,
-                    false,
-                    String::from("mutable arguments detected"),
-                    vec![],
-                    vec![],
-                    ClosureInfoStorage::new(),
-                ));
-            }
-
-            // Has generics.
-            let has_generics = ty::InternalSubsts::identity_for_item(tcx, def_id)
-                .iter()
-                .any(|param| match param.unpack() {
-                    ty::GenericArgKind::Lifetime(..) => false,
-                    ty::GenericArgKind::Type(..) => {
-                        error!("{:?} has type parameters", def_id);
-                        true
-                    }
-                    ty::GenericArgKind::Const(..) => {
-                        error!("{:?} has const parameters", def_id);
-                        true
-                    }
-                });
-
-            if has_generics {
-                return None;
-            }
-
-            // Retrieve the instance, as we know it exists.
-            let instance = ty::Instance::mono(tcx, def_id);
-            trace!("current instance {:?}", &instance);
-
-            let fn_storage = Rc::new(RefCell::new(FunctionInfoStorage::new(instance)));
-            let upvar_storage = Rc::new(RefCell::new(ClosureInfoStorage::new()));
-            let virtual_stack = VirtualStack::new();
-
-            let current_fn = PartialFunctionInfo::new_function(instance, ArgTys::new(arg_tys));
-
-            let results = Collector::new(
-                current_fn.clone(),
-                virtual_stack,
-                fn_storage.clone(),
-                upvar_storage.clone(),
-                tcx,
-            )
-            .run();
-
-            let fn_info = {
-                let mut borrowed_storage = fn_storage.borrow_mut();
-                borrowed_storage.add_with_body(
-                    instance,
-                    instance,
-                    results.places().to_owned(),
-                    results.calls().to_owned(),
-                    body.to_owned(),
-                    body.span,
-                    results.unhandled().to_owned(),
-                )
-            };
-
-            // Calculate important locals.
-            let important_locals = {
-                // Parse important arguments.
-                let important_args = if args.important_args.is_none() {
-                    // If no important arguments are provided, assume all are important.
-                    let n_args = fn_sig.decl.inputs.len();
-                    (1..=n_args).collect()
-                } else {
-                    args.important_args.as_ref().unwrap().to_owned()
-                };
-                ImportantLocals::from_important_args(important_args, def_id, tcx)
-            };
-
-            let allowlist = args
-                .allowlist
-                .iter()
-                .map(|re| Regex::new(re).unwrap())
-                .collect();
-
-            let dump = run(
-                &fn_info,
-                fn_storage.clone(),
-                upvar_storage,
-                important_locals,
-                annotated_pure,
-                &allowlist,
-                tcx,
-            );
-            Some(dump)
-        } else {
-            None
+    match precheck(instance, tcx) {
+        Err(reason) => {
+            return PurityAnalysisResult::error(def_id, reason, annotated_pure);
         }
-    } else {
-        None
-    }
+        _ => {}
+    };
+
+    let collector = Collector::collect(instance, tcx);
+
+    // Calculate important locals.
+    let important_locals = {
+        // Parse important arguments.
+        let important_args = if args.important_args.is_none() {
+            // If no important arguments are provided, assume all are important.
+            let arg_count = {
+                let body = instance.subst_mir_and_normalize_erasing_regions(
+                    tcx,
+                    ty::ParamEnv::reveal_all(),
+                    tcx.instance_mir(instance.def).to_owned(),
+                );
+                body.arg_count
+            };
+            (1..=arg_count).collect()
+        } else {
+            args.important_args.as_ref().unwrap().to_owned()
+        };
+        ImportantLocals::from_important_args(important_args, def_id, tcx)
+    };
+
+    let allowlist = args
+        .allowlist
+        .as_ref()
+        .unwrap_or(&vec![])
+        .iter()
+        .map(|re| Regex::new(re).unwrap())
+        .collect();
+
+    analyzer::run(
+        collector.get_function_info_storage(),
+        collector.get_closure_info_storage(),
+        important_locals,
+        annotated_pure,
+        &allowlist,
+        tcx,
+    )
 }

@@ -5,7 +5,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_mir_dataflow::{Analysis, AnalysisDomain, Direction, Engine, JoinSemiLattice, Results};
 use std::mem::transmute;
 
-use super::collector::Collector;
+use crate::collector::collector::Collector;
 
 #[allow(dead_code)]
 pub struct EngineShim<'a, 'tcx, A>

@@ -1,11 +1,7 @@
 use itertools::Itertools;
-use rustc_middle::mir::{Body, Operand};
-use rustc_middle::ty::{self, Ty, TyCtxt};
-use rustc_span::def_id::DefId;
+use rustc_middle::ty::{self, Ty};
 
-use super::normalized_place::NormalizedPlace;
-use super::tracked_ty::TrackedTy;
-use super::CollectorDomain;
+use crate::common::TrackedTy;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArgTys<'tcx> {
@@ -15,27 +11,6 @@ pub struct ArgTys<'tcx> {
 impl<'tcx> ArgTys<'tcx> {
     pub fn new(arg_tys: Vec<TrackedTy<'tcx>>) -> Self {
         ArgTys { arg_tys }
-    }
-
-    pub fn from_args(
-        args: &Vec<Operand<'tcx>>,
-        def_id: DefId,
-        body: &Body<'tcx>,
-        state: &CollectorDomain<'tcx>,
-        tcx: TyCtxt<'tcx>,
-    ) -> Self {
-        ArgTys {
-            arg_tys: args
-                .iter()
-                .map(|arg| {
-                    arg.place()
-                        .and_then(|place| Some(NormalizedPlace::from_place(&place, tcx, def_id)))
-                        .and_then(|place| state.get(&place))
-                        .and_then(|ty| Some(ty.to_owned()))
-                        .unwrap_or(TrackedTy::from_ty(arg.ty(body, tcx)))
-                })
-                .collect_vec(),
-        }
     }
 
     pub fn as_closure(&self) -> Self {

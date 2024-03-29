@@ -1,6 +1,7 @@
-use super::facts::*;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
+
+use crate::important::facts::*;
 
 /// When we load facts out of the table, they are essentially random
 /// strings. We create an intern table to map those to small integers.

@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use log::{debug, trace, warn};
 use rustc_middle::mir::{
     BasicBlock, Body, Location, Operand, Place, Statement, StatementKind, Terminator,
@@ -6,18 +7,20 @@ use rustc_middle::mir::{
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_mir_dataflow::{Analysis, AnalysisDomain, CallReturnPlaces, JoinSemiLattice};
 use rustc_utils::BodyExt;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
+use std::rc::Rc;
 
-use super::closure_collector::CollectClosures;
-use super::collector_domain::CollectorDomain;
-use super::dataflow_shim::iterate_to_fixpoint;
-use super::has_tracked_ty::HasTrackedTy;
-use super::storage::{ClosureInfoStorageRef, FunctionInfoStorageRef};
-use super::structs::{
-    ArgTys, FunctionCall, NormalizedPlace, PartialFunctionInfo, TrackedTy, VirtualStack,
-    VirtualStackItem,
+use crate::collector::closure_collector::CollectClosures;
+use crate::collector::collector_domain::CollectorDomain;
+use crate::collector::dataflow_shim::iterate_to_fixpoint;
+use crate::collector::has_tracked_ty::HasTrackedTy;
+use crate::collector::structs::{PartialFunctionInfo, VirtualStack, VirtualStackItem};
+use crate::common::storage::{
+    ClosureInfoStorage, ClosureInfoStorageRef, FunctionInfoStorage, FunctionInfoStorageRef,
 };
+use crate::common::{ArgTys, FunctionCall, FunctionInfo, NormalizedPlace, TrackedTy};
 
 #[derive(Clone)]
 pub struct Collector<'tcx> {
@@ -30,30 +33,61 @@ pub struct Collector<'tcx> {
 }
 
 impl<'tcx> Collector<'tcx> {
-    pub fn new(
-        current_function: PartialFunctionInfo<'tcx>,
-        virtual_stack: VirtualStack<'tcx>,
-        function_storage_ref: FunctionInfoStorageRef<'tcx>,
-        closure_storage_ref: ClosureInfoStorageRef<'tcx>,
-        tcx: TyCtxt<'tcx>,
-    ) -> Self {
-        let substituted_body = current_function
-            .instance()
-            .subst_mir_and_normalize_erasing_regions(
-                tcx,
-                ty::ParamEnv::reveal_all(),
-                tcx.instance_mir(current_function.instance().def).to_owned(),
-            );
-        Collector {
+    pub fn get_function_info_storage(&self) -> FunctionInfoStorage<'tcx> {
+        self.function_storage_ref.borrow().to_owned()
+    }
+
+    pub fn get_closure_info_storage(&self) -> ClosureInfoStorage<'tcx> {
+        self.closure_storage_ref.borrow().to_owned()
+    }
+}
+
+impl<'tcx> Collector<'tcx> {
+    pub fn collect(instance: ty::Instance<'tcx>, tcx: TyCtxt<'tcx>) -> Self {
+        let body = instance.subst_mir_and_normalize_erasing_regions(
+            tcx,
+            ty::ParamEnv::reveal_all(),
+            tcx.instance_mir(instance.def).to_owned(),
+        );
+        let arg_tys = (1..=body.arg_count)
+            .map(|local| {
+                let arg_ty = body.local_decls[local.into()].ty;
+                TrackedTy::from_ty(arg_ty)
+            })
+            .collect_vec();
+        let current_function = PartialFunctionInfo::new_function(instance, ArgTys::new(arg_tys));
+        let function_storage_ref = Rc::new(RefCell::new(FunctionInfoStorage::new(instance)));
+        let closure_storage_ref = Rc::new(RefCell::new(ClosureInfoStorage::new()));
+        let virtual_stack = VirtualStack::new();
+
+        let mut collector = Collector::new_raw(
             current_function,
             virtual_stack,
-            substituted_body,
             function_storage_ref,
             closure_storage_ref,
             tcx,
-        }
+        );
+        let results = collector.run();
+
+        let fn_info = FunctionInfo::new_with_body(
+            instance,
+            instance,
+            results.places().to_owned(),
+            results.calls().to_owned(),
+            body.to_owned(),
+            body.span,
+            results.unhandled().to_owned(),
+        );
+
+        collector
+            .function_storage_ref
+            .borrow_mut()
+            .insert(fn_info.clone());
+
+        collector
     }
-    pub fn run(mut self) -> CollectorDomain<'tcx> {
+
+    fn run(&mut self) -> CollectorDomain<'tcx> {
         trace!("running dataflow analysis on {:?}", self.current_function);
 
         self.virtual_stack.push(VirtualStackItem::new(
@@ -97,7 +131,31 @@ impl<'tcx> Collector<'tcx> {
             .unwrap()
     }
 
-    fn propagate(
+    fn new_raw(
+        current_function: PartialFunctionInfo<'tcx>,
+        virtual_stack: VirtualStack<'tcx>,
+        function_storage_ref: FunctionInfoStorageRef<'tcx>,
+        closure_storage_ref: ClosureInfoStorageRef<'tcx>,
+        tcx: TyCtxt<'tcx>,
+    ) -> Self {
+        let substituted_body = current_function
+            .instance()
+            .subst_mir_and_normalize_erasing_regions(
+                tcx,
+                ty::ParamEnv::reveal_all(),
+                tcx.instance_mir(current_function.instance().def).to_owned(),
+            );
+        Collector {
+            current_function,
+            virtual_stack,
+            substituted_body,
+            function_storage_ref,
+            closure_storage_ref,
+            tcx,
+        }
+    }
+
+    fn run_raw(
         &self,
         function_ty: Ty<'tcx>,
         args: &Vec<Operand<'tcx>>,
@@ -132,10 +190,12 @@ impl<'tcx> Collector<'tcx> {
 
                     let return_ty: TrackedTy<'_> = match function_data.instance().def {
                         ty::InstanceDef::Intrinsic(..) | ty::InstanceDef::Virtual(..) => {
-                            self.function_storage_ref.borrow_mut().add_without_body(
-                                self.current_function.instance().to_owned(),
-                                def_id.to_owned(),
-                                arg_tys.as_vec().to_owned(),
+                            self.function_storage_ref.borrow_mut().insert(
+                                FunctionInfo::new_without_body(
+                                    self.current_function.instance().to_owned(),
+                                    def_id.to_owned(),
+                                    arg_tys.as_vec().to_owned(),
+                                ),
                             );
                             state.add_call(FunctionCall::new_without_body(
                                 function_data.instance().def_id(),
@@ -158,7 +218,7 @@ impl<'tcx> Collector<'tcx> {
                             );
 
                             // Swap the current instance and continue recursively.
-                            let results = Collector::new(
+                            let results = Collector::new_raw(
                                 function_data.clone(),
                                 self.virtual_stack.clone(),
                                 self.function_storage_ref.clone(),
@@ -167,14 +227,16 @@ impl<'tcx> Collector<'tcx> {
                             )
                             .run();
 
-                            self.function_storage_ref.borrow_mut().add_with_body(
-                                self.current_function.instance().to_owned(),
-                                function_data.instance().to_owned(),
-                                results.places().to_owned(),
-                                results.calls().to_owned(),
-                                body.to_owned(),
-                                body.span,
-                                results.unhandled().to_owned(),
+                            self.function_storage_ref.borrow_mut().insert(
+                                FunctionInfo::new_with_body(
+                                    self.current_function.instance().to_owned(),
+                                    function_data.instance().to_owned(),
+                                    results.places().to_owned(),
+                                    results.calls().to_owned(),
+                                    body.to_owned(),
+                                    body.span,
+                                    results.unhandled().to_owned(),
+                                ),
                             );
                             state.add_call(FunctionCall::new_with_body(
                                 function_data.instance().to_owned(),
@@ -210,11 +272,13 @@ impl<'tcx> Collector<'tcx> {
                     }
                 }
             } else {
-                self.function_storage_ref.borrow_mut().add_without_body(
-                    self.current_function.instance().to_owned(),
-                    def_id.to_owned(),
-                    arg_tys.as_vec().to_owned(),
-                );
+                self.function_storage_ref
+                    .borrow_mut()
+                    .insert(FunctionInfo::new_without_body(
+                        self.current_function.instance().to_owned(),
+                        def_id.to_owned(),
+                        arg_tys.as_vec().to_owned(),
+                    ));
                 state.add_call(FunctionCall::new_without_body(
                     def_id.to_owned(),
                     args.to_owned(),
@@ -253,7 +317,7 @@ impl<'tcx> AnalysisDomain<'tcx> for Collector<'tcx> {
 
         if self.current_function.is_closure() {
             // Augment with types from tracked upvars.
-            let upvars = self.current_function.expect_closure_info();
+            let upvars = self.current_function.expect_closure();
             type_tracker.augment_closure_with_upvars(upvars, body, def_id, self.tcx);
         }
         type_tracker.augment_with_args(
@@ -327,14 +391,13 @@ impl<'tcx> Analysis<'tcx> for Collector<'tcx> {
                     )
                 );
                 let function_ty = func.ty(&self.substituted_body, self.tcx);
-                let arg_tys = ArgTys::from_args(
+                let arg_tys = state.construct_args(
                     args,
                     self.current_function.instance().def_id(),
                     &self.substituted_body,
-                    state,
                     self.tcx,
                 );
-                self.propagate(function_ty, args, arg_tys, state, Some(destination));
+                self.run_raw(function_ty, args, arg_tys, state, Some(destination));
             }
             TerminatorKind::Drop { place, .. } => {
                 let place_ty = place.ty(&self.substituted_body, self.tcx);
@@ -353,7 +416,7 @@ impl<'tcx> Analysis<'tcx> for Collector<'tcx> {
                                 place.ty(&self.substituted_body, self.tcx).ty,
                             ))]);
 
-                        self.propagate(
+                        self.run_raw(
                             destructor_function_ty,
                             destructor_args,
                             destructor_arg_tys,

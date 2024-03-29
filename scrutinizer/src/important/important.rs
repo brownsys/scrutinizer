@@ -1,7 +1,5 @@
 use std::collections::HashSet;
 
-use super::compute::compute_dependent_locals;
-
 use flowistry::indexed::impls::LocationOrArg;
 use flowistry::infoflow::Direction;
 use itertools::Itertools;
@@ -11,6 +9,8 @@ use rustc_middle::ty::TyCtxt;
 use rustc_utils::PlaceExt;
 use serde::ser::SerializeSeq;
 use serde::Serialize;
+
+use crate::important::compute::compute_dependent_locals;
 
 // Newtype for a vec of locals.
 #[derive(Clone, Debug)]

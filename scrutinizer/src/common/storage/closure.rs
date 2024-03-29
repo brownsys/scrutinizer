@@ -3,26 +3,13 @@ use rustc_span::def_id::DefId;
 use serde::{ser::SerializeMap, Serialize};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use super::{ClosureInfo, TrackedTy};
+use crate::common::{ClosureInfo, TrackedTy};
 
 pub type ClosureInfoStorageRef<'tcx> = Rc<RefCell<ClosureInfoStorage<'tcx>>>;
 
 #[derive(Clone, Debug)]
 pub struct ClosureInfoStorage<'tcx> {
     closures: HashMap<DefId, ClosureInfo<'tcx>>,
-}
-
-impl<'tcx> Serialize for ClosureInfoStorage<'tcx> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut state = serializer.serialize_map(Some(self.closures.len()))?;
-        for (k, v) in &self.closures {
-            state.serialize_entry(format!("{:?}", k).as_str(), format!("{:?}", v).as_str())?;
-        }
-        state.end()
-    }
 }
 
 impl<'tcx> ClosureInfoStorage<'tcx> {
@@ -36,18 +23,19 @@ impl<'tcx> ClosureInfoStorage<'tcx> {
         self.closures.get(&def_id)
     }
 
-    pub fn try_resolve_and_insert(
+    // TODO: enforce that only closures are passed to this function.
+    pub fn update_with(
         &mut self,
-        ty: Ty<'tcx>,
-        instance: &ty::Instance<'tcx>,
+        closure_ty: Ty<'tcx>,
+        outer_instance: &ty::Instance<'tcx>,
         upvars: Vec<TrackedTy<'tcx>>,
         tcx: TyCtxt<'tcx>,
     ) {
-        if let ty::TyKind::Closure(closure_def_id, ..) = ty.kind() {
-            let resolved_closure_ty = instance.subst_mir_and_normalize_erasing_regions(
+        if let ty::TyKind::Closure(closure_def_id, ..) = closure_ty.kind() {
+            let resolved_closure_ty = outer_instance.subst_mir_and_normalize_erasing_regions(
                 tcx,
                 ty::ParamEnv::reveal_all(),
-                ty,
+                closure_ty,
             );
             self.closures
                 .entry(closure_def_id.to_owned())
@@ -68,5 +56,18 @@ impl<'tcx> ClosureInfoStorage<'tcx> {
                     with_substs: resolved_closure_ty,
                 });
         }
+    }
+}
+
+impl<'tcx> Serialize for ClosureInfoStorage<'tcx> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_map(Some(self.closures.len()))?;
+        for (k, v) in &self.closures {
+            state.serialize_entry(format!("{:?}", k).as_str(), format!("{:?}", v).as_str())?;
+        }
+        state.end()
     }
 }

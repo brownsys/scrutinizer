@@ -2,10 +2,45 @@ use itertools::Itertools;
 use log::trace;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{self, TyCtxt};
+use std::iter::once;
 
-use super::arg_tys::ArgTys;
-use super::HasArgTys;
-use super::{ClosureInfo, ClosureInfoStorageRef};
+use crate::common::storage::ClosureInfoStorageRef;
+use crate::common::{ArgTys, ClosureInfo, TrackedTy};
+
+fn extract_arg_tys<'tcx>(instance: ty::Instance<'tcx>, tcx: TyCtxt<'tcx>) -> ArgTys<'tcx> {
+    let ty = instance.ty(tcx, ty::ParamEnv::reveal_all());
+    match ty.kind() {
+        ty::FnDef(_, _) => {
+            let sig = tcx
+                .fn_sig(instance.def_id())
+                .subst(tcx, instance.substs)
+                .skip_binder();
+            let arg_tys = sig
+                .inputs()
+                .iter()
+                .map(|ty| TrackedTy::from_ty(ty.to_owned()))
+                .collect();
+            ArgTys::new(arg_tys)
+        }
+        ty::Closure(_, substs) => {
+            let closure_substs = substs.as_closure();
+            let sig = closure_substs.sig().skip_binder();
+            assert!(sig.inputs().len() == 1);
+            let sig_tys = sig
+                .inputs()
+                .iter()
+                .map(|ty| TrackedTy::from_ty(ty.to_owned()).spread_tuple())
+                .flatten();
+            let arg_tys = once(TrackedTy::from_ty(
+                tcx.mk_imm_ref(tcx.mk_region_from_kind(ty::ReErased), ty),
+            ))
+            .chain(sig_tys)
+            .collect();
+            ArgTys::new(arg_tys)
+        }
+        _ => panic!("argument extraction from {:?} is unsupported", instance),
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum PartialFunctionInfo<'tcx> {
@@ -28,13 +63,6 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
         }
     }
 
-    pub fn is_closure(&self) -> bool {
-        match self {
-            PartialFunctionInfo::Closure { .. } => true,
-            _ => false,
-        }
-    }
-
     pub fn new_closure(
         instance: ty::Instance<'tcx>,
         tracked_args: ArgTys<'tcx>,
@@ -44,6 +72,13 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
             instance,
             tracked_args,
             closure_info,
+        }
+    }
+
+    pub fn is_closure(&self) -> bool {
+        match self {
+            PartialFunctionInfo::Closure { .. } => true,
+            _ => false,
         }
     }
 
@@ -61,7 +96,7 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
         }
     }
 
-    pub fn expect_closure_info(&self) -> &ClosureInfo<'tcx> {
+    pub fn expect_closure(&self) -> &ClosureInfo<'tcx> {
         match self {
             PartialFunctionInfo::Closure { closure_info, .. } => closure_info,
             _ => panic!("expect_closure_info called on {:?}", self),
@@ -79,7 +114,7 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
         } else {
             arg_tys.to_owned()
         };
-        let provided_args = instance.arg_tys(tcx);
+        let provided_args = extract_arg_tys(instance, tcx);
         let merged_arg_tys = ArgTys::merge(inferred_args, provided_args);
         if tcx.is_closure(instance.def_id()) {
             match closure_info_storage.borrow().get(&instance.def_id()) {
@@ -199,7 +234,7 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
                             PartialFunctionInfo::new_closure(
                                 resolved_instance,
                                 fn_data.tracked_args().to_owned(),
-                                fn_data.expect_closure_info().to_owned(),
+                                fn_data.expect_closure().to_owned(),
                             )
                         }
                         None => {

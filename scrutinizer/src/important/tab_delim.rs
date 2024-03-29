@@ -1,11 +1,11 @@
-use super::facts::AllFacts;
-use super::intern::{InternTo, InternerTables};
-
 use log::error;
 use std::fs::File;
 use std::io::{self, prelude::*};
 use std::path::Path;
 use std::process;
+
+use crate::important::facts::AllFacts;
+use crate::important::intern::{InternTo, InternerTables};
 
 trait FromTabDelimited<'input>: Sized {
     fn parse(

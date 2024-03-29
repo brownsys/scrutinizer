@@ -1,12 +1,23 @@
 use itertools::Itertools;
-use rustc_middle::ty::Ty;
+use rustc_middle::ty::{self, Ty};
 use serde::ser::{Serialize, SerializeStructVariant};
 use std::collections::HashSet;
 use std::fmt::Debug;
 
-use super::ContainsErased;
+fn contains_erased<'tcx>(ty: Ty<'tcx>) -> bool {
+    let contains_erased_type = ty.walk().any(|ty| match ty.unpack() {
+        ty::GenericArgKind::Type(ty) => match ty.kind() {
+            ty::Param(..) | ty::FnPtr(..) | ty::RawPtr(..) | ty::Dynamic(..) | ty::Foreign(..) => {
+                true
+            }
+            _ => false,
+        },
+        _ => false,
+    });
+    !ty.contains_closure() && contains_erased_type
+}
 
-pub fn transpose<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
+fn transpose<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
     let len = v[0].len();
     let mut iters: Vec<_> = v.into_iter().map(|n| n.into_iter()).collect_vec();
     (0..len)
@@ -22,7 +33,7 @@ pub enum TrackedTy<'tcx> {
 
 impl<'tcx> TrackedTy<'tcx> {
     pub fn from_ty(ty: Ty<'tcx>) -> Self {
-        if ty.contains_erased() {
+        if contains_erased(ty) {
             TrackedTy::Erased(HashSet::new())
         } else {
             TrackedTy::Present(ty)

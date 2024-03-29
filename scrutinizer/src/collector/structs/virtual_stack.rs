@@ -1,6 +1,6 @@
 use rustc_hir::def_id::DefId;
 
-use super::ArgTys;
+use crate::common::ArgTys;
 
 #[derive(Clone, Debug)]
 pub struct VirtualStack<'tcx> {

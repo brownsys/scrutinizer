@@ -1,15 +1,53 @@
 use itertools::Itertools;
 use rustc_abi::FieldIdx;
-use rustc_middle::mir::{tcx::PlaceTy, Body, Local, Place, PlaceElem};
-use rustc_middle::ty::{Ty, TyCtxt};
+use rustc_abi::VariantIdx;
+use rustc_middle::mir::{tcx::PlaceTy, Body, Local, Operand, Place, PlaceElem, ProjectionElem};
+use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_mir_dataflow::{fmt::DebugWithContext, JoinSemiLattice};
 use rustc_span::def_id::DefId;
 use rustc_utils::PlaceExt;
 use std::collections::{HashMap, HashSet};
 
-use super::collector::Collector;
-use super::structs::{ArgTys, ClosureInfo, FunctionCall, FunctionInfo, NormalizedPlace, TrackedTy};
-use super::traits::RefreshAndProject;
+use crate::collector::collector::Collector;
+use crate::common::{ArgTys, ClosureInfo, FunctionCall, FunctionInfo, NormalizedPlace, TrackedTy};
+
+fn refresh_and_project<'tcx>(
+    place_ty: PlaceTy<'tcx>,
+    projection_elem: &PlaceElem<'tcx>,
+    tcx: TyCtxt<'tcx>,
+) -> PlaceTy<'tcx> {
+    let new_projection = match projection_elem {
+        ProjectionElem::Field(field_idx, ..) => {
+            let fixed_projection = match place_ty.ty.kind() {
+                ty::TyKind::Adt(adt_def, adt_substs) => {
+                    let variant_idx = place_ty.variant_index.unwrap_or(VariantIdx::from_usize(0));
+                    let variant_def = adt_def.variant(variant_idx);
+                    let field = variant_def.fields.get(field_idx.to_owned()).unwrap();
+                    let fixed_ty = field.ty(tcx, adt_substs);
+                    ProjectionElem::Field(field_idx.to_owned(), fixed_ty)
+                }
+                ty::TyKind::Closure(.., closure_substs) => {
+                    let closure_substs = closure_substs.as_closure();
+                    let upvars = closure_substs.upvar_tys().collect_vec();
+                    let fixed_ty = upvars.get(field_idx.index()).unwrap();
+                    ProjectionElem::Field(field_idx.to_owned(), fixed_ty.to_owned())
+                }
+                ty::TyKind::Tuple(inner_tys) => {
+                    let fixed_ty = inner_tys.get(field_idx.index()).unwrap();
+                    ProjectionElem::Field(field_idx.to_owned(), fixed_ty.to_owned())
+                }
+                _ => panic!(
+                    "field projection of {:?} is not supported: kind={:?}",
+                    place_ty,
+                    place_ty.ty.kind()
+                ),
+            };
+            place_ty.projection_ty(tcx, fixed_projection)
+        }
+        _ => place_ty.projection_ty(tcx, projection_elem.to_owned()),
+    };
+    new_projection
+}
 
 #[derive(Debug, Clone)]
 pub struct CollectorDomain<'tcx> {
@@ -141,7 +179,7 @@ impl<'tcx> CollectorDomain<'tcx> {
                     projection_tail
                         .iter()
                         .fold(initial_place, |place_ty, projection_elem| {
-                            place_ty.refresh_and_project(projection_elem, tcx)
+                            refresh_and_project(place_ty, projection_elem, tcx)
                         })
                         .ty
                 });
@@ -189,6 +227,26 @@ impl<'tcx> CollectorDomain<'tcx> {
             TrackedTy::Present(..) => provided_return_ty,
             TrackedTy::Erased(..) => inferred_return_ty,
         }
+    }
+
+    pub fn construct_args(
+        &self,
+        args: &Vec<Operand<'tcx>>,
+        def_id: DefId,
+        body: &Body<'tcx>,
+        tcx: TyCtxt<'tcx>,
+    ) -> ArgTys<'tcx> {
+        ArgTys::new(
+            args.iter()
+                .map(|arg| {
+                    arg.place()
+                        .and_then(|place| Some(NormalizedPlace::from_place(&place, tcx, def_id)))
+                        .and_then(|place| self.get(&place))
+                        .and_then(|ty| Some(ty.to_owned()))
+                        .unwrap_or(TrackedTy::from_ty(arg.ty(body, tcx)))
+                })
+                .collect_vec(),
+        )
     }
 
     pub fn add_call(&mut self, call: FunctionCall<'tcx>) {

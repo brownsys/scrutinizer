@@ -6,9 +6,9 @@ use rustc_span::Span;
 use serde::ser::{Serialize, SerializeStructVariant};
 use std::collections::{HashMap, HashSet};
 
-use super::function_call::FunctionCall;
-use super::normalized_place::NormalizedPlace;
-use super::tracked_ty::TrackedTy;
+use crate::common::function_call::FunctionCall;
+use crate::common::normalized_place::NormalizedPlace;
+use crate::common::tracked_ty::TrackedTy;
 
 #[derive(Debug, Clone)]
 pub enum FunctionInfo<'tcx> {
@@ -29,6 +29,38 @@ pub enum FunctionInfo<'tcx> {
 }
 
 impl<'tcx> FunctionInfo<'tcx> {
+    pub fn new_with_body(
+        parent: ty::Instance<'tcx>,
+        instance: ty::Instance<'tcx>,
+        places: HashMap<NormalizedPlace<'tcx>, TrackedTy<'tcx>>,
+        calls: HashSet<FunctionCall<'tcx>>,
+        body: Body<'tcx>,
+        span: Span,
+        unhandled: HashSet<Ty<'tcx>>,
+    ) -> Self {
+        FunctionInfo::WithBody {
+            parent,
+            instance,
+            places,
+            calls,
+            body,
+            span,
+            unhandled,
+        }
+    }
+
+    pub fn new_without_body(
+        parent: ty::Instance<'tcx>,
+        def_id: DefId,
+        tracked_args: Vec<TrackedTy<'tcx>>,
+    ) -> Self {
+        FunctionInfo::WithoutBody {
+            parent,
+            def_id,
+            tracked_args,
+        }
+    }
+
     pub fn def_id(&self) -> DefId {
         match self {
             FunctionInfo::WithBody { instance, .. } => instance.def_id(),
