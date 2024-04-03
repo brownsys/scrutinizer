@@ -190,3 +190,8 @@ allowlist = [
   # This is removed in further versions.
   'core\[\w*\]::slice::cmp::\{extern#0\}::memcmp',
 ]
+trusted_stdlib = [
+  'alloc\[\w*\]::vec',
+  'alloc\[\w*\]::slice',
+  'std\[\w*\]::collections::hash::map',
+]

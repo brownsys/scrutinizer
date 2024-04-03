@@ -3,7 +3,7 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::mir::Body;
 use rustc_middle::ty::{self, Ty};
 use rustc_span::Span;
-use serde::ser::{Serialize, SerializeStructVariant};
+use serde::ser::{Serialize, SerializeStruct};
 use std::collections::{HashMap, HashSet};
 
 use crate::common::function_call::FunctionCall;
@@ -13,7 +13,6 @@ use crate::common::tracked_ty::TrackedTy;
 #[derive(Debug, Clone)]
 pub enum FunctionInfo<'tcx> {
     WithBody {
-        parent: ty::Instance<'tcx>,
         instance: ty::Instance<'tcx>,
         places: HashMap<NormalizedPlace<'tcx>, TrackedTy<'tcx>>,
         calls: HashSet<FunctionCall<'tcx>>,
@@ -22,7 +21,6 @@ pub enum FunctionInfo<'tcx> {
         unhandled: HashSet<Ty<'tcx>>,
     },
     WithoutBody {
-        parent: ty::Instance<'tcx>,
         def_id: DefId,
         tracked_args: Vec<TrackedTy<'tcx>>,
     },
@@ -30,7 +28,6 @@ pub enum FunctionInfo<'tcx> {
 
 impl<'tcx> FunctionInfo<'tcx> {
     pub fn new_with_body(
-        parent: ty::Instance<'tcx>,
         instance: ty::Instance<'tcx>,
         places: HashMap<NormalizedPlace<'tcx>, TrackedTy<'tcx>>,
         calls: HashSet<FunctionCall<'tcx>>,
@@ -39,7 +36,6 @@ impl<'tcx> FunctionInfo<'tcx> {
         unhandled: HashSet<Ty<'tcx>>,
     ) -> Self {
         FunctionInfo::WithBody {
-            parent,
             instance,
             places,
             calls,
@@ -49,13 +45,8 @@ impl<'tcx> FunctionInfo<'tcx> {
         }
     }
 
-    pub fn new_without_body(
-        parent: ty::Instance<'tcx>,
-        def_id: DefId,
-        tracked_args: Vec<TrackedTy<'tcx>>,
-    ) -> Self {
+    pub fn new_without_body(def_id: DefId, tracked_args: Vec<TrackedTy<'tcx>>) -> Self {
         FunctionInfo::WithoutBody {
-            parent,
             def_id,
             tracked_args,
         }
@@ -68,17 +59,17 @@ impl<'tcx> FunctionInfo<'tcx> {
         }
     }
 
+    pub fn instance(&self) -> Option<ty::Instance<'tcx>> {
+        match self {
+            FunctionInfo::WithBody { instance, .. } => Some(instance.to_owned()),
+            FunctionInfo::WithoutBody { .. } => None,
+        }
+    }
+
     pub fn calls(&self) -> Option<&HashSet<FunctionCall<'tcx>>> {
         match self {
             FunctionInfo::WithBody { calls, .. } => Some(calls),
             _ => None,
-        }
-    }
-
-    pub fn has_body(&self) -> bool {
-        match self {
-            FunctionInfo::WithBody { .. } => true,
-            FunctionInfo::WithoutBody { .. } => false,
         }
     }
 }
@@ -90,7 +81,6 @@ impl<'tcx> PartialEq for FunctionInfo<'tcx> {
         match (self, other) {
             (
                 Self::WithBody {
-                    parent: l_parent,
                     instance: l_instance,
                     places: l_places,
                     calls: l_calls,
@@ -99,7 +89,6 @@ impl<'tcx> PartialEq for FunctionInfo<'tcx> {
                     ..
                 },
                 Self::WithBody {
-                    parent: r_parent,
                     instance: r_instance,
                     places: r_places,
                     calls: r_calls,
@@ -108,8 +97,7 @@ impl<'tcx> PartialEq for FunctionInfo<'tcx> {
                     ..
                 },
             ) => {
-                l_parent == r_parent
-                    && l_instance == r_instance
+                l_instance == r_instance
                     && l_places == r_places
                     && l_calls == r_calls
                     && l_span == r_span
@@ -117,16 +105,14 @@ impl<'tcx> PartialEq for FunctionInfo<'tcx> {
             }
             (
                 Self::WithoutBody {
-                    parent: l_parent,
                     def_id: l_def_id,
                     tracked_args: l_tracked_args,
                 },
                 Self::WithoutBody {
-                    parent: r_parent,
                     def_id: r_def_id,
                     tracked_args: r_tracked_args,
                 },
-            ) => l_parent == r_parent && l_def_id == r_def_id && l_tracked_args == r_tracked_args,
+            ) => l_def_id == r_def_id && l_tracked_args == r_tracked_args,
             _ => false,
         }
     }
@@ -139,37 +125,31 @@ impl<'tcx> Serialize for FunctionInfo<'tcx> {
     {
         match *self {
             FunctionInfo::WithBody {
-                ref parent,
                 ref instance,
-                // ref places,
                 ref calls,
                 ref span,
                 ref unhandled,
                 ..
             } => {
-                let mut tv =
-                    serializer.serialize_struct_variant("FunctionInfo", 0, "WithBody", 6)?;
-                tv.serialize_field("parent", format!("{:?}", parent).as_str())?;
-                tv.serialize_field("instance", format!("{:?}", instance).as_str())?;
-                // tv.serialize_field("places", &places)?;
+                let mut tv = serializer.serialize_struct("FunctionInfo", 5)?;
+                tv.serialize_field("def_id", format!("{:?}", instance.def_id()).as_str())?;
                 tv.serialize_field("calls", calls)?;
                 tv.serialize_field("span", format!("{:?}", span).as_str())?;
                 tv.serialize_field(
                     "unhandled",
                     &unhandled.iter().map(|ty| format!("{:?}", ty)).collect_vec(),
                 )?;
+                tv.serialize_field("has_body", &true)?;
                 tv.end()
             }
             FunctionInfo::WithoutBody {
-                ref parent,
                 ref def_id,
                 ref tracked_args,
             } => {
-                let mut tv =
-                    serializer.serialize_struct_variant("FunctionInfo", 1, "WithoutBody", 3)?;
-                tv.serialize_field("parent", format!("{:?}", parent).as_str())?;
+                let mut tv = serializer.serialize_struct("FunctionInfo", 3)?;
                 tv.serialize_field("def_id", format!("{:?}", def_id).as_str())?;
                 tv.serialize_field("tracked_args", &tracked_args)?;
+                tv.serialize_field("has_body", &false)?;
                 tv.end()
             }
         }

@@ -12,6 +12,7 @@ pub enum JoinIdx {
     Right(usize),
 }
 
+#[doc = "pure"]
 pub fn left_join(
     left: Vec<Vec<Value>>,
     right: Vec<Vec<Value>>,

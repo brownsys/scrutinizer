@@ -71,7 +71,6 @@ impl<'tcx> Collector<'tcx> {
 
         let fn_info = FunctionInfo::new_with_body(
             instance,
-            instance,
             results.places().to_owned(),
             results.calls().to_owned(),
             body.to_owned(),
@@ -192,7 +191,6 @@ impl<'tcx> Collector<'tcx> {
                         ty::InstanceDef::Intrinsic(..) | ty::InstanceDef::Virtual(..) => {
                             self.function_storage_ref.borrow_mut().insert(
                                 FunctionInfo::new_without_body(
-                                    self.current_function.instance().to_owned(),
                                     def_id.to_owned(),
                                     arg_tys.as_vec().to_owned(),
                                 ),
@@ -229,7 +227,6 @@ impl<'tcx> Collector<'tcx> {
 
                             self.function_storage_ref.borrow_mut().insert(
                                 FunctionInfo::new_with_body(
-                                    self.current_function.instance().to_owned(),
                                     function_data.instance().to_owned(),
                                     results.places().to_owned(),
                                     results.calls().to_owned(),
@@ -275,7 +272,6 @@ impl<'tcx> Collector<'tcx> {
                 self.function_storage_ref
                     .borrow_mut()
                     .insert(FunctionInfo::new_without_body(
-                        self.current_function.instance().to_owned(),
                         def_id.to_owned(),
                         arg_tys.as_vec().to_owned(),
                     ));

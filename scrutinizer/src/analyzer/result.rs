@@ -10,7 +10,7 @@ pub struct FunctionWithMetadata<'tcx> {
     function: FunctionInfo<'tcx>,
     important_locals: ImportantLocals,
     raw_pointer_deref: bool,
-    whitelisted: bool,
+    allowlisted: bool,
     has_transmute: bool,
 }
 
@@ -19,14 +19,14 @@ impl<'tcx> FunctionWithMetadata<'tcx> {
         function: FunctionInfo<'tcx>,
         important_locals: ImportantLocals,
         raw_pointer_deref: bool,
-        whitelisted: bool,
+        allowlisted: bool,
         has_transmute: bool,
     ) -> Self {
         FunctionWithMetadata {
             function,
             important_locals,
             raw_pointer_deref,
-            whitelisted,
+            allowlisted,
             has_transmute,
         }
     }

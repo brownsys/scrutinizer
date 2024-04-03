@@ -1,6 +1,6 @@
 use itertools::Itertools;
-use rustc_abi::FieldIdx;
-use rustc_abi::VariantIdx;
+use log::debug;
+use rustc_abi::{FieldIdx, VariantIdx};
 use rustc_middle::mir::{tcx::PlaceTy, Body, Local, Operand, Place, PlaceElem, ProjectionElem};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_mir_dataflow::{fmt::DebugWithContext, JoinSemiLattice};
@@ -19,34 +19,58 @@ fn refresh_and_project<'tcx>(
     let new_projection = match projection_elem {
         ProjectionElem::Field(field_idx, ..) => {
             let fixed_projection = match place_ty.ty.kind() {
-                ty::TyKind::Adt(adt_def, adt_substs) => {
-                    let variant_idx = place_ty.variant_index.unwrap_or(VariantIdx::from_usize(0));
-                    let variant_def = adt_def.variant(variant_idx);
-                    let field = variant_def.fields.get(field_idx.to_owned()).unwrap();
-                    let fixed_ty = field.ty(tcx, adt_substs);
-                    ProjectionElem::Field(field_idx.to_owned(), fixed_ty)
-                }
-                ty::TyKind::Closure(.., closure_substs) => {
-                    let closure_substs = closure_substs.as_closure();
-                    let upvars = closure_substs.upvar_tys().collect_vec();
-                    let fixed_ty = upvars.get(field_idx.index()).unwrap();
-                    ProjectionElem::Field(field_idx.to_owned(), fixed_ty.to_owned())
-                }
-                ty::TyKind::Tuple(inner_tys) => {
-                    let fixed_ty = inner_tys.get(field_idx.index()).unwrap();
-                    ProjectionElem::Field(field_idx.to_owned(), fixed_ty.to_owned())
-                }
-                _ => panic!(
-                    "field projection of {:?} is not supported: kind={:?}",
-                    place_ty,
-                    place_ty.ty.kind()
+                ty::TyKind::Alias(.., alias_ty) => index_ty_field(
+                    PlaceTy {
+                        ty: alias_ty.self_ty(),
+                        variant_index: place_ty.variant_index,
+                    },
+                    field_idx,
+                    tcx,
                 ),
+                _ => index_ty_field(place_ty, field_idx, tcx),
             };
+            debug!("projecting ty={:?}, proj={:?}", place_ty, fixed_projection);
             place_ty.projection_ty(tcx, fixed_projection)
         }
-        _ => place_ty.projection_ty(tcx, projection_elem.to_owned()),
+        _ => {
+            debug!("projecting ty={:?}, proj={:?}", place_ty, projection_elem);
+            place_ty.projection_ty(tcx, projection_elem.to_owned())
+        }
     };
     new_projection
+}
+
+fn index_ty_field<'tcx>(
+    place_ty: PlaceTy<'tcx>,
+    field_idx: &FieldIdx,
+    tcx: TyCtxt<'tcx>,
+) -> PlaceElem<'tcx> {
+    let fixed_projection = match place_ty.ty.kind() {
+        ty::TyKind::Adt(adt_def, adt_substs) => {
+            let variant_idx = place_ty.variant_index.unwrap_or(VariantIdx::from_usize(0));
+            let variant_def = adt_def.variant(variant_idx);
+            let field = variant_def.fields.get(field_idx.to_owned()).unwrap();
+            let fixed_ty = field.ty(tcx, adt_substs);
+            ProjectionElem::Field(field_idx.to_owned(), fixed_ty)
+        }
+        ty::TyKind::Closure(.., closure_substs) => {
+            let closure_substs = closure_substs.as_closure();
+            let upvars = closure_substs.upvar_tys().collect_vec();
+            let fixed_ty = upvars.get(field_idx.index()).unwrap();
+            ProjectionElem::Field(field_idx.to_owned(), fixed_ty.to_owned())
+        }
+        ty::TyKind::Tuple(inner_tys) => {
+            let fixed_ty = inner_tys.get(field_idx.index()).unwrap();
+            ProjectionElem::Field(field_idx.to_owned(), fixed_ty.to_owned())
+        }
+        _ => {
+            panic!(
+                "field projection is not supported: ty={:?}, field_idx={:?}",
+                place_ty, field_idx,
+            );
+        }
+    };
+    fixed_projection
 }
 
 #[derive(Debug, Clone)]

@@ -72,6 +72,7 @@ pub struct Config {
     target_filter: Option<String>,
     important_args: Option<Vec<usize>>,
     allowlist: Option<Vec<String>>,
+    trusted_stdlib: Option<Vec<String>>,
 }
 
 impl RustcPlugin for ScrutinizerPlugin {
@@ -205,12 +206,21 @@ fn analyze_instance<'tcx>(
         .map(|re| Regex::new(re).unwrap())
         .collect();
 
+    let trusted_stdlib = args
+        .trusted_stdlib
+        .as_ref()
+        .unwrap_or(&vec![])
+        .iter()
+        .map(|re| Regex::new(re).unwrap())
+        .collect();
+
     analyzer::run(
         collector.get_function_info_storage(),
         collector.get_closure_info_storage(),
         important_locals,
         annotated_pure,
         &allowlist,
+        &trusted_stdlib,
         tcx,
     )
 }

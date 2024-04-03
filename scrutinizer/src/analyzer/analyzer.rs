@@ -1,6 +1,8 @@
 use itertools::Itertools;
 use regex::Regex;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::mir::{Mutability, VarDebugInfoContents};
+use rustc_middle::ty::{self, TyCtxt};
+use rustc_span::symbol::Symbol;
 
 use crate::analyzer::{
     heuristics::{HasRawPtrDeref, HasTransmute},
@@ -17,8 +19,40 @@ fn analyze_item<'tcx>(
     failing_calls_ref: &mut Vec<FunctionWithMetadata<'tcx>>,
     storage: &FunctionInfoStorage<'tcx>,
     allowlist: &Vec<Regex>,
+    trusted_stdlib: &Vec<Regex>,
     tcx: TyCtxt<'tcx>,
 ) -> bool {
+    let is_trusted = {
+        let def_path_str = format!("{:?}", item.def_id());
+        let trusted_stdlib_member = trusted_stdlib.iter().any(|lib| lib.is_match(&def_path_str));
+        let self_ty = item.instance().and_then(|instance| {
+            let body = instance.subst_mir_and_normalize_erasing_regions(
+                tcx,
+                ty::ParamEnv::reveal_all(),
+                tcx.instance_mir(instance.def).to_owned(),
+            );
+            body.var_debug_info
+                .iter()
+                .find(|dbg_info| dbg_info.name == Symbol::intern("self"))
+                .and_then(|self_dbg_info| match self_dbg_info.value {
+                    VarDebugInfoContents::Place(place) => Some(place),
+                    _ => None,
+                })
+                .and_then(|self_place| Some(self_place.ty(&body, tcx).ty))
+        });
+        let has_immut_self_ref = self_ty
+            .and_then(|self_ty| {
+                Some(
+                    self_ty
+                        .ref_mutability()
+                        .and_then(|mutability| Some(mutability == Mutability::Not))
+                        .unwrap_or(false),
+                )
+            })
+            .unwrap_or(false);
+        trusted_stdlib_member && !has_immut_self_ref
+    };
+
     let is_allowlisted = {
         let def_path_str = format!("{:?}", item.def_id());
         allowlist.iter().any(|lib| lib.is_match(&def_path_str))
@@ -26,13 +60,13 @@ fn analyze_item<'tcx>(
 
     let has_no_important_locals = important_locals.is_empty();
 
-    if has_no_important_locals || is_allowlisted {
+    if has_no_important_locals || is_allowlisted || is_trusted {
         let info_with_metadata = FunctionWithMetadata::new(
             item.to_owned(),
             important_locals.clone(),
             false,
-            false,
             is_allowlisted,
+            false,
         );
         passing_calls_ref.push(info_with_metadata);
         true
@@ -68,6 +102,7 @@ fn analyze_item<'tcx>(
                             failing_calls_ref,
                             storage,
                             allowlist,
+                            trusted_stdlib,
                             tcx,
                         )
                     })
@@ -76,30 +111,28 @@ fn analyze_item<'tcx>(
             })
             .unwrap_or(false);
 
-        if !has_unhandled_calls && !has_raw_pointer_deref && !has_transmute && item.has_body() {
+        if !has_unhandled_calls && !has_raw_pointer_deref && !has_transmute && has_no_leaking_calls
+        {
             let info_with_metadata = FunctionWithMetadata::new(
                 item.to_owned(),
                 important_locals.clone(),
                 has_raw_pointer_deref,
-                has_transmute,
                 is_allowlisted,
+                has_transmute,
             );
             passing_calls_ref.push(info_with_metadata);
+            true
         } else {
             let info_with_metadata = FunctionWithMetadata::new(
                 item.to_owned(),
                 important_locals.clone(),
                 has_raw_pointer_deref,
-                has_transmute,
                 is_allowlisted,
+                has_transmute,
             );
             failing_calls_ref.push(info_with_metadata);
-        };
-
-        return !has_unhandled_calls
-            && !has_raw_pointer_deref
-            && !has_transmute
-            && has_no_leaking_calls;
+            false
+        }
     }
 }
 
@@ -109,6 +142,7 @@ pub fn run<'tcx>(
     important_locals: ImportantLocals,
     annotated_pure: bool,
     allowlist: &Vec<Regex>,
+    trusted_stdlib: &Vec<Regex>,
     tcx: TyCtxt<'tcx>,
 ) -> PurityAnalysisResult<'tcx> {
     let origin = functions.get_with_body(functions.origin()).unwrap();
@@ -123,6 +157,7 @@ pub fn run<'tcx>(
         &mut failing_calls,
         &functions,
         allowlist,
+        trusted_stdlib,
         tcx,
     );
 
