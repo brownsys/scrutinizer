@@ -42,3 +42,4 @@ nll-facts
 *.result.json
 mir_dumps
 UPDATES.md
+*.callgraph.svg
