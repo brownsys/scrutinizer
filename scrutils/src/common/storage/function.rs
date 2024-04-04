@@ -62,4 +62,8 @@ impl<'tcx> FunctionInfoStorage<'tcx> {
     pub fn origin(&self) -> &ty::Instance<'tcx> {
         &self.origin
     }
+
+    pub fn all(&self) -> &Vec<FunctionInfo<'tcx>> {
+        &self.fns
+    }
 }
