@@ -471,11 +471,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ad4cc8da4ef723ed60bced201181d83791ad433213d8c24efffda1eec85d741"
 
 [[package]]
-name = "scrutinizer"
+name = "scrutils"
 version = "0.1.0"
 dependencies = [
- "clap",
- "env_logger",
  "flowistry",
  "itertools",
  "log",
@@ -483,11 +481,24 @@ dependencies = [
  "polonius-engine",
  "regex",
  "rustc-hash",
- "rustc_plugin",
  "rustc_utils",
  "serde",
  "serde_json",
- "textwrap",
+ "toml 0.8.12",
+]
+
+[[package]]
+name = "scrutinizer"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "env_logger",
+ "log",
+ "regex",
+ "rustc_plugin",
+ "scrutils",
+ "serde",
+ "serde_json",
  "toml 0.8.12",
 ]
 
@@ -571,12 +582,6 @@ checksum = "be55cf8942feac5c765c2c993422806843c9a9a45d4d5c407ad6dd2ea95eb9b6"
 dependencies = [
  "winapi-util",
 ]
-
-[[package]]
-name = "textwrap"
-version = "0.14.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0066c8d12af8b5acd21e00547c3797fde4e8677254a7ee429176ccebbe93dd80"
 
 [[package]]
 name = "toml"

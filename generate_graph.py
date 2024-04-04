@@ -2,6 +2,7 @@ from collections import defaultdict
 
 import json
 import networkx as nx
+import os
 import sys
 
 VISUALIZE_PASSING = False
@@ -75,4 +76,9 @@ with open(sys.argv[1]) as file:
                 B.nodes[v].update(G.nodes[source])
 
         A = nx.nx_agraph.to_agraph(B)
-        A.draw(f"{graph['def_id']}.callgraph.svg", format="svg", prog="dot")
+
+        if not os.path.exists("callgraphs"):
+            os.mkdir("callgraphs")
+
+        A.draw(f"callgraphs/{graph['def_id']
+                             }.callgraph.svg", format="svg", prog="dot")

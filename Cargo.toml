@@ -1,7 +1,3 @@
 [workspace]
-members = [
-    "scrutinizer",
-]
-exclude = [
-    "test-crate",
-]
+members = ["scrutils", "scrutinizer"]
+exclude = ["test-crate"]

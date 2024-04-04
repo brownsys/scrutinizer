@@ -29,6 +29,7 @@ pub struct Collector<'tcx> {
     substituted_body: Body<'tcx>,
     function_storage_ref: FunctionInfoStorageRef<'tcx>,
     closure_storage_ref: ClosureInfoStorageRef<'tcx>,
+    shallow: bool,
     tcx: TyCtxt<'tcx>,
 }
 
@@ -43,7 +44,7 @@ impl<'tcx> Collector<'tcx> {
 }
 
 impl<'tcx> Collector<'tcx> {
-    pub fn collect(instance: ty::Instance<'tcx>, tcx: TyCtxt<'tcx>) -> Self {
+    pub fn collect(instance: ty::Instance<'tcx>, tcx: TyCtxt<'tcx>, shallow: bool) -> Self {
         let body = instance.subst_mir_and_normalize_erasing_regions(
             tcx,
             ty::ParamEnv::reveal_all(),
@@ -60,11 +61,12 @@ impl<'tcx> Collector<'tcx> {
         let closure_storage_ref = Rc::new(RefCell::new(ClosureInfoStorage::new()));
         let virtual_stack = VirtualStack::new();
 
-        let mut collector = Collector::new_raw(
+        let mut collector = Collector::new(
             current_function,
             virtual_stack,
             function_storage_ref,
             closure_storage_ref,
+            shallow,
             tcx,
         );
         let results = collector.run();
@@ -130,11 +132,12 @@ impl<'tcx> Collector<'tcx> {
             .unwrap()
     }
 
-    fn new_raw(
+    fn new(
         current_function: PartialFunctionInfo<'tcx>,
         virtual_stack: VirtualStack<'tcx>,
         function_storage_ref: FunctionInfoStorageRef<'tcx>,
         closure_storage_ref: ClosureInfoStorageRef<'tcx>,
+        shallow: bool,
         tcx: TyCtxt<'tcx>,
     ) -> Self {
         let substituted_body = current_function
@@ -150,11 +153,12 @@ impl<'tcx> Collector<'tcx> {
             substituted_body,
             function_storage_ref,
             closure_storage_ref,
+            shallow,
             tcx,
         }
     }
 
-    fn run_raw(
+    fn process_call(
         &self,
         function_ty: Ty<'tcx>,
         args: &Vec<Operand<'tcx>>,
@@ -167,6 +171,10 @@ impl<'tcx> Collector<'tcx> {
 
         // TODO: handle different call types (e.g. FnPtr).
         if let ty::FnDef(def_id, substs) = function_ty.kind() {
+            if !def_id.is_local() && self.shallow {
+                return;
+            }
+
             // Calculate argument types, account for possible erasure.
             let plausible_functions = self.current_function.resolve(
                 def_id.to_owned(),
@@ -216,11 +224,12 @@ impl<'tcx> Collector<'tcx> {
                             );
 
                             // Swap the current instance and continue recursively.
-                            let results = Collector::new_raw(
+                            let results = Collector::new(
                                 function_data.clone(),
                                 self.virtual_stack.clone(),
                                 self.function_storage_ref.clone(),
                                 self.closure_storage_ref.clone(),
+                                self.shallow,
                                 self.tcx,
                             )
                             .run();
@@ -377,15 +386,6 @@ impl<'tcx> Analysis<'tcx> for Collector<'tcx> {
                 ref destination,
                 ..
             } => {
-                debug!(
-                    "call to {:?}",
-                    func.tracked_ty(
-                        state,
-                        self.closure_storage_ref.clone(),
-                        self.current_function.instance(),
-                        self.tcx
-                    )
-                );
                 let function_ty = func.ty(&self.substituted_body, self.tcx);
                 let arg_tys = state.construct_args(
                     args,
@@ -393,7 +393,7 @@ impl<'tcx> Analysis<'tcx> for Collector<'tcx> {
                     &self.substituted_body,
                     self.tcx,
                 );
-                self.run_raw(function_ty, args, arg_tys, state, Some(destination));
+                self.process_call(function_ty, args, arg_tys, state, Some(destination));
             }
             TerminatorKind::Drop { place, .. } => {
                 let place_ty = place.ty(&self.substituted_body, self.tcx);
@@ -412,7 +412,7 @@ impl<'tcx> Analysis<'tcx> for Collector<'tcx> {
                                 place.ty(&self.substituted_body, self.tcx).ty,
                             ))]);
 
-                        self.run_raw(
+                        self.process_call(
                             destructor_function_ty,
                             destructor_args,
                             destructor_arg_tys,

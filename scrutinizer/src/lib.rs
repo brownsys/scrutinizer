@@ -1,13 +1,6 @@
 #![feature(box_patterns)]
 #![feature(rustc_private)]
 
-mod analyzer;
-mod collector;
-mod common;
-mod important;
-mod precheck;
-mod selector;
-
 extern crate rustc_abi;
 extern crate rustc_borrowck;
 extern crate rustc_data_structures;
@@ -21,11 +14,10 @@ extern crate rustc_mir_dataflow;
 extern crate rustc_span;
 extern crate rustc_trait_selection;
 
-use analyzer::PurityAnalysisResult;
-use collector::Collector;
-use important::ImportantLocals;
-use precheck::precheck;
-use selector::{select_functions, select_pprs};
+use scrutils::{
+    precheck, run_analysis, select_functions, select_pprs, Collector, ImportantLocals,
+    PurityAnalysisResult,
+};
 
 use clap::Parser;
 use log::trace;
@@ -60,6 +52,10 @@ fn default_output_file() -> String {
     "analysis.result.json".to_string()
 }
 
+fn default_shallow() -> bool {
+    false
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
     #[serde(default = "default_mode")]
@@ -68,6 +64,8 @@ pub struct Config {
     only_inconsistent: bool,
     #[serde(default = "default_output_file")]
     output_file: String,
+    #[serde(default = "default_shallow")]
+    shallow: bool,
 
     target_filter: Option<String>,
     important_args: Option<Vec<usize>>,
@@ -176,7 +174,7 @@ fn analyze_instance<'tcx>(
         _ => {}
     };
 
-    let collector = Collector::collect(instance, tcx);
+    let collector = Collector::collect(instance, tcx, args.shallow);
 
     // Calculate important locals.
     let important_locals = {
@@ -214,7 +212,7 @@ fn analyze_instance<'tcx>(
         .map(|re| Regex::new(re).unwrap())
         .collect();
 
-    analyzer::run(
+    run_analysis(
         collector.get_function_info_storage(),
         collector.get_closure_info_storage(),
         important_locals,
