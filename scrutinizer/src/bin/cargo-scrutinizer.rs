@@ -7,5 +7,5 @@ fn main() {
             File::create("scrutinizer.log").unwrap(),
         )))
         .init();
-    rustc_plugin::cli_main(scrutinizer::ScrutinizerPlugin);
+    rustc_plugin::cli_main(scrutinizer::ScrutinizerPlugin, Some("+nightly-2023-04-12"));
 }

@@ -10,7 +10,7 @@ rustc_private = true
 scrutils = { version = "0.1.0", path = "../scrutils" }
 
 # rustc plugin
-rustc_plugin = { git = "https://github.com/KinanBab/rustc_plugin.git" }
+rustc_plugin = { git = "https://github.com/KinanBab/rustc_plugin.git", branch = "main" }
 
 # miscellaneous
 clap = { version = "4", features = ["derive"] }
