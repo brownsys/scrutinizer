@@ -7,7 +7,7 @@ edition = "2021"
 rustc_private = true
 
 [dependencies]
-rustc_utils = "=0.6.0-nightly-2023-04-12"
+rustc_utils = { git = "https://github.com/KinanBab/rustc_plugin.git" }
 
 # flowistry
 flowistry = "=0.5.36"

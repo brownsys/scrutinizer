@@ -27,6 +27,7 @@ use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::env;
+use std::process::Command;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -103,6 +104,39 @@ impl RustcPlugin for ScrutinizerPlugin {
         let mut callbacks = ScrutinizerCallbacks { args: plugin_args };
         let compiler = rustc_driver::RunCompiler::new(&compiler_args, &mut callbacks);
         compiler.run()
+    }
+
+    fn modify_cargo(&self, cargo: &mut Command, _args: &Self::Args) {
+        // Find the default target triplet.
+        let output = Command::new("rustc")
+            .arg("-vV")
+            .output()
+            .expect("Cannot get default rustc target");
+        let stdout = String::from_utf8(output.stdout)
+            .expect("Cannot parse stdout");
+
+        let mut target = String::from("");
+        for part in stdout.split("\n") {
+            if part.starts_with("host: ") {
+              target = part.chars().skip("host: ".len()).collect();
+            }
+        }
+        if target.len() == 0 {
+            panic!("Bad output");
+        }
+
+        // Add -Zalways-encode-mir to RUSTFLAGS
+        let mut old_rustflags = String::from("");
+        for (key, val) in cargo.get_envs() {
+          if key == "RUSTFLAGS" {
+              if let Some(val) = val {
+                  old_rustflags = format!("{}", val.to_str().unwrap());
+              }
+          }
+        }
+        cargo.env("RUSTFLAGS", format!("-Zalways-encode-mir {}", old_rustflags));
+        cargo.arg("-Zbuild-std=std,core,alloc,proc_macro");
+        cargo.arg(format!("--target={}", target));
     }
 }
 
