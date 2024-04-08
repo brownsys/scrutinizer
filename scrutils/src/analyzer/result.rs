@@ -78,6 +78,10 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
     pub fn is_inconsistent(&self) -> bool {
         self.annotated_pure != self.status
     }
+
+    pub fn def_id(&self) -> &DefId {
+        &self.def_id
+    }
 }
 
 impl<'tcx> Serialize for PurityAnalysisResult<'tcx> {

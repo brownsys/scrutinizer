@@ -27,10 +27,10 @@ use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::env;
-use std::process::Command;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
+use std::process::{exit, Command};
 
 pub struct ScrutinizerPlugin;
 
@@ -112,13 +112,12 @@ impl RustcPlugin for ScrutinizerPlugin {
             .arg("-vV")
             .output()
             .expect("Cannot get default rustc target");
-        let stdout = String::from_utf8(output.stdout)
-            .expect("Cannot parse stdout");
+        let stdout = String::from_utf8(output.stdout).expect("Cannot parse stdout");
 
         let mut target = String::from("");
         for part in stdout.split("\n") {
             if part.starts_with("host: ") {
-              target = part.chars().skip("host: ".len()).collect();
+                target = part.chars().skip("host: ".len()).collect();
             }
         }
         if target.len() == 0 {
@@ -128,13 +127,16 @@ impl RustcPlugin for ScrutinizerPlugin {
         // Add -Zalways-encode-mir to RUSTFLAGS
         let mut old_rustflags = String::from("");
         for (key, val) in cargo.get_envs() {
-          if key == "RUSTFLAGS" {
-              if let Some(val) = val {
-                  old_rustflags = format!("{}", val.to_str().unwrap());
-              }
-          }
+            if key == "RUSTFLAGS" {
+                if let Some(val) = val {
+                    old_rustflags = format!("{}", val.to_str().unwrap());
+                }
+            }
         }
-        cargo.env("RUSTFLAGS", format!("-Zalways-encode-mir {}", old_rustflags));
+        cargo.env(
+            "RUSTFLAGS",
+            format!("-Zalways-encode-mir {}", old_rustflags),
+        );
         cargo.arg("-Zbuild-std=std,core,alloc,proc_macro");
         cargo.arg(format!("--target={}", target));
     }
@@ -156,6 +158,15 @@ impl rustc_driver::Callbacks for ScrutinizerCallbacks {
             File::create(self.args.output_file.to_owned())
                 .and_then(|mut file| file.write_all(result_string.as_bytes()))
                 .unwrap();
+            let inconsistent: Vec<_> = result
+                .iter()
+                .filter(|res| res.is_inconsistent())
+                .map(|res| res.def_id())
+                .collect();
+            if !inconsistent.is_empty() {
+                println!("Scrutinizer failed to verify the purity of the following regions: {:?}. See more information in {:?}.", inconsistent, self.args.output_file);
+                exit(-1);
+            }
         });
 
         rustc_driver::Compilation::Continue
