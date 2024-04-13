@@ -31,6 +31,8 @@ use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::process::{exit, Command};
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 pub struct ScrutinizerPlugin;
 
@@ -155,7 +157,8 @@ impl rustc_driver::Callbacks for ScrutinizerCallbacks {
         queries.global_ctxt().unwrap().enter(|tcx| {
             let result = scrutinizer(tcx, &self.args);
             let result_string = serde_json::to_string_pretty(&result).unwrap();
-            File::create(self.args.output_file.to_owned())
+            let file_name = format!("{}.{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(), self.args.output_file);
+            File::create(file_name)
                 .and_then(|mut file| file.write_all(result_string.as_bytes()))
                 .unwrap();
             let inconsistent: Vec<_> = result
