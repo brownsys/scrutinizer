@@ -193,5 +193,6 @@ allowlist = [
 trusted_stdlib = [
   'alloc\[\w*\]::vec',
   'alloc\[\w*\]::slice',
+  'alloc\[\w*\]::string',
   'std\[\w*\]::collections::hash::map',
 ]
