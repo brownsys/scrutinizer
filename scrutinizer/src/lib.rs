@@ -19,11 +19,13 @@ use scrutils::{
     PurityAnalysisResult,
 };
 
+use chrono::offset::Local;
 use clap::Parser;
 use log::trace;
 use regex::Regex;
 use rustc_middle::ty;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
+use rustc_span::def_id::LOCAL_CRATE;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::env;
@@ -31,8 +33,7 @@ use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::process::{exit, Command};
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
+use std::time::Instant;
 
 pub struct ScrutinizerPlugin;
 
@@ -148,6 +149,13 @@ struct ScrutinizerCallbacks {
     args: Config,
 }
 
+#[derive(Serialize)]
+struct Output<'tcx> {
+    results: Vec<PurityAnalysisResult<'tcx>>,
+    elapsed: f32,
+    crate_name: String,
+}
+
 impl rustc_driver::Callbacks for ScrutinizerCallbacks {
     fn after_analysis<'tcx>(
         &mut self,
@@ -155,13 +163,24 @@ impl rustc_driver::Callbacks for ScrutinizerCallbacks {
         queries: &'tcx rustc_interface::Queries<'tcx>,
     ) -> rustc_driver::Compilation {
         queries.global_ctxt().unwrap().enter(|tcx| {
-            let result = scrutinizer(tcx, &self.args);
-            let result_string = serde_json::to_string_pretty(&result).unwrap();
-            let file_name = format!("{}.{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(), self.args.output_file);
+            let now = Instant::now();
+            let results = scrutinizer(tcx, &self.args);
+            let elapsed = now.elapsed();
+
+            let output = Output {
+                results,
+                elapsed: elapsed.as_secs_f32(),
+                crate_name: format!("{}", tcx.crate_name(LOCAL_CRATE))
+
+            };
+
+            let output_string = serde_json::to_string_pretty(&output).unwrap();
+            let file_name = format!("{}.{}", Local::now(), self.args.output_file);
             File::create(file_name)
-                .and_then(|mut file| file.write_all(result_string.as_bytes()))
+                .and_then(|mut file| file.write_all(output_string.as_bytes()))
                 .unwrap();
-            let inconsistent: Vec<_> = result
+            let inconsistent: Vec<_> = output
+                .results
                 .iter()
                 .filter(|res| res.is_inconsistent())
                 .map(|res| res.def_id())

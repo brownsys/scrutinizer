@@ -56,8 +56,8 @@ def draw_failing(graph, data):
 
 
 with open(sys.argv[1]) as file:
-    graphs = json.loads(file.read())
-    for graph in graphs:
+    input = json.loads(file.read())
+    for graph in input['results']:
         G = nx.DiGraph()
 
         if VISUALIZE_PASSING:
