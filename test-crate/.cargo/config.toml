@@ -1,5 +1,0 @@
-[build]
-target = "aarch64-apple-darwin"
-
-[unstable]
-build-std = ["std", "core", "alloc", "proc_macro"]

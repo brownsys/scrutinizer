@@ -16,3 +16,6 @@ features = ["handlebars", "tera"]
 
 [dependencies.handlebars]
 features = ["dir_source"]
+
+[workspace.metadata.dylint]
+libraries = [{ path = "../scrutinizer-lint" }]
