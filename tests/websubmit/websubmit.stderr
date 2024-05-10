@@ -1,0 +1,14 @@
+error: static analysis was not able to verify the purity of the region
+  --> websubmit.rs:59:1
+   |
+59 | / pub fn average<GroupType>(
+60 | |     column: AvgIdx,
+61 | |     group_by: AvgIdx,
+62 | |     data: Vec<Vec<Value>>,
+...  |
+79 | |         .collect()
+80 | | }
+   | |_^
+   |
+   = help: consider using sandbox or privacy region
+   = note: `#[deny(scrutinizer_lint)]` on by default

@@ -84,6 +84,14 @@ impl<'tcx> LateLintPass<'tcx> for ScrutinizerLint {
                     });
 
                 if has_generics {
+                    span_lint_and_help(
+                        cx,
+                        SCRUTINIZER_LINT,
+                        item.span,
+                        "static analysis was not able to verify the purity of the region",
+                        None,
+                        "consider using sandbox or privacy region",
+                    );
                     None
                 } else {
                     // Retrieve the instance, as we know it exists.

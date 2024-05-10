@@ -1,4 +1,35 @@
 error: static analysis was not able to verify the purity of the region
+  --> lam.rs:23:5
+   |
+23 | /     pub fn execute_once<F: FnOnce(usize) -> usize>(x: usize, l: F) -> usize {
+24 | |         l(x)
+25 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+   = note: `#[deny(scrutinizer_lint)]` on by default
+
+error: static analysis was not able to verify the purity of the region
+  --> lam.rs:29:5
+   |
+29 | /     pub fn execute_mut<F: FnMut(usize) -> usize>(x: usize, mut l: F) -> usize {
+30 | |         l(x)
+31 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+  --> lam.rs:35:5
+   |
+35 | /     pub fn execute<F: Fn(usize) -> usize>(x: usize, l: F) -> usize {
+36 | |         l(x)
+37 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
   --> lam.rs:41:5
    |
 41 | /     pub fn execute_dyn(x: usize, l: &dyn Fn(usize) -> usize) -> usize {
@@ -7,7 +38,6 @@ error: static analysis was not able to verify the purity of the region
    | |_____^
    |
    = help: consider using sandbox or privacy region
-   = note: `#[deny(scrutinizer_lint)]` on by default
 
 error: static analysis was not able to verify the purity of the region
    --> lam.rs:95:5

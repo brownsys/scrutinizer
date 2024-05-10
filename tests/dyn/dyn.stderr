@@ -44,6 +44,16 @@ error: static analysis was not able to verify the purity of the region
    = help: consider using sandbox or privacy region
 
 error: static analysis was not able to verify the purity of the region
+  --> dyn.rs:77:5
+   |
+77 | /     fn identity<T>(a: T) -> T {
+78 | |         a
+79 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
   --> dyn.rs:90:5
    |
 90 | /     fn execute(a: usize, cl: &dyn Fn(usize) -> usize) -> usize {

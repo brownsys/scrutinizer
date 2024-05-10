@@ -1,0 +1,314 @@
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:11:1
+   |
+11 |   redefine! { <HashMap<usize, usize>>::clone_from => hashmap: &mut HashMap<usize, usize>, other: &HashMap<usize, usize> => (), "impure" }
+   |   --------------------------------------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: `#[deny(scrutinizer_lint)]` on by default
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:12:1
+   |
+12 |   redefine! { <HashMap<usize, usize>>::clear => hashmap: &mut HashMap<usize, usize> => (), "impure" }
+   |   --------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:14:1
+   |
+14 |   redefine! { <HashMap<usize, usize>>::drain => hashmap: &mut HashMap<usize, usize> => Drain<'_, usize, usize>, "impure" }
+   |   ------------------------------------------------------------------------------------------------------------------------ in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:16:1
+   |
+16 |   redefine! { <HashMap<usize, usize>>::entry => hashmap: &mut HashMap<usize, usize>, key: usize => Entry<'_, usize, usize>, "impure" }
+   |   ------------------------------------------------------------------------------------------------------------------------------------ in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:29:9
+   |
+29 | /         pub fn $new_ident<$($lt),*>($($param_ident : $param_ty),*) -> $ret_ty {
+30 | |             <$origin_ty>::$func_ident($($param_ident),*)
+31 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:17:1
+   |
+17 |   redefine! { extend_1, <HashMap<usize, usize>>::extend<'a> => hashmap: &mut HashMap<usize, usize>, iter: impl IntoIterator<Item = (&'a usize, &'a usize)> => (), "impure" }
+   |   -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:23:9
+   |
+23 | /         pub fn $new_ident($($param_ident : $param_ty),*) -> $ret_ty {
+24 | |             <$origin_ty>::$func_ident($($param_ident),*)
+25 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:18:1
+   |
+18 |   redefine! { extend_2, <HashMap<usize, usize>>::extend => hashmap: &mut HashMap<usize, usize>, iter: impl IntoIterator<Item = (usize, usize)> => (), "impure" }
+   |   -------------------------------------------------------------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:21:1
+   |
+21 |   redefine! { <HashMap<usize, usize>>::from_iter => iter: impl IntoIterator<Item = (usize, usize)> => HashMap<usize, usize>, "impure" }
+   |   ------------------------------------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:22:1
+   |
+22 |   redefine! { <HashMap<usize, usize>>::fmt => hashmap: &HashMap<usize, usize>, f: &mut Formatter<'_> => FmtResult, "impure" }
+   |   --------------------------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:17:9
+   |
+17 | /         pub fn $func_ident<$($lt),*>($($param_ident : $param_ty),*) -> $ret_ty {
+18 | |             <$origin_ty>::$func_ident($($param_ident),*)
+19 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:25:1
+   |
+25 |   redefine! { <HashMap<usize, usize>>::get_mut<'a> => hashmap: &'a mut HashMap<usize, usize>, k: &usize => Option<&'a mut usize>, "impure" }
+   |   ------------------------------------------------------------------------------------------------------------------------------------------ in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:28:1
+   |
+28 |   redefine! { <HashMap<usize, usize>>::insert => hashmap: &mut HashMap<usize, usize>, k: usize, v: usize => Option<usize>, "impure" }
+   |   ----------------------------------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> hashmap.rs:31:1
+   |
+31 | / pub fn into_iter_2(hashmap: &mut HashMap<usize, usize>) -> IterMut<'_, usize, usize> {
+32 | |     hashmap.into_iter()
+33 | | }
+   | |_^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:42:1
+   |
+42 |   redefine! { <HashMap<usize, usize>>::iter_mut => hashmap: &mut HashMap<usize, usize> => IterMut<'_, usize, usize>, "impure" }
+   |   ----------------------------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:47:1
+   |
+47 |   redefine! { <HashMap<usize, usize>>::remove => hashmap: &mut HashMap<usize, usize>, k: &usize => Option<usize>, "impure" }
+   |   -------------------------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:48:1
+   |
+48 |   redefine! { <HashMap<usize, usize>>::remove_entry => hashmap: &mut HashMap<usize, usize>, k: &usize => Option<(usize, usize)>, "impure" }
+   |   ----------------------------------------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:49:1
+   |
+49 |   redefine! { <HashMap<usize, usize>>::retain => hashmap: &mut HashMap<usize, usize>, f: impl FnMut(&usize, &mut usize) -> bool => (), "impure" }
+   |   ----------------------------------------------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:50:1
+   |
+50 |   redefine! { <HashMap<usize, usize>>::reserve => hashmap: &mut HashMap<usize, usize>, additional: usize => (), "impure" }
+   |   ------------------------------------------------------------------------------------------------------------------------ in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:51:1
+   |
+51 |   redefine! { <HashMap<usize, usize>>::shrink_to => hashmap: &mut HashMap<usize, usize>, min_capacity: usize => (), "impure" }
+   |   ---------------------------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:52:1
+   |
+52 |   redefine! { <HashMap<usize, usize>>::shrink_to_fit => hashmap: &mut HashMap<usize, usize> => (), "impure" }
+   |   ----------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:53:1
+   |
+53 |   redefine! { <HashMap<usize, usize>>::try_reserve => hashmap: &mut HashMap<usize, usize>, additional: usize => Result<(), TryReserveError>, "impure" }
+   |   ----------------------------------------------------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: static analysis was not able to verify the purity of the region
+  --> lib.rs:11:9
+   |
+11 | /         pub fn $func_ident($($param_ident : $param_ty),*) -> $ret_ty {
+12 | |             <$origin_ty>::$func_ident($($param_ident),*)
+13 | |         }
+   | |_________^
+   |
+  ::: hashmap.rs:55:1
+   |
+55 |   redefine! { <HashMap<usize, usize>>::values_mut => hashmap: &mut HashMap<usize, usize> => ValuesMut<'_, usize, usize>, "impure" }
+   |   --------------------------------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = help: consider using sandbox or privacy region
+   = note: this error originates in the macro `redefine` (in Nightly builds, run with -Z macro-backtrace for more info)
