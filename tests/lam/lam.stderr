@@ -1,0 +1,24 @@
+error: static analysis was not able to verify the purity of the region
+  --> lam.rs:41:5
+   |
+41 | /     pub fn execute_dyn(x: usize, l: &dyn Fn(usize) -> usize) -> usize {
+42 | |         l(x)
+43 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+   = note: `#[deny(scrutinizer_lint)]` on by default
+
+error: static analysis was not able to verify the purity of the region
+   --> lam.rs:95:5
+    |
+95  | /     pub fn partially_opaque(sensitive_attr: usize, flag: bool, l1: &dyn Fn(usize) -> usize) -> usize {
+96  | |         let l2 = |x: usize| -> usize {
+97  | |             return x * x;
+98  | |         };
+...   |
+106 | |         lambda(sensitive_attr)
+107 | |     }
+    | |_____^
+    |
+    = help: consider using sandbox or privacy region

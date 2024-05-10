@@ -1,0 +1,36 @@
+error: static analysis was not able to verify the purity of the region
+  --> raw_ptr.rs:6:5
+   |
+6  | /     pub unsafe fn raw_mut_ptr_deref(a: usize) {
+7  | |         let mut x = 42;
+8  | |         let raw = &mut x as *mut i32;
+9  | |         *raw = 5;
+10 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+   = note: `#[deny(scrutinizer_lint)]` on by default
+
+error: static analysis was not able to verify the purity of the region
+  --> raw_ptr.rs:14:5
+   |
+14 | /     pub unsafe fn raw_mut_ptr_mut_ref(a: usize) {
+15 | |         let mut x = 42;
+16 | |         let raw = &mut x as *mut i32;
+17 | |         let mut_ref = &mut *raw;
+18 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+  --> raw_ptr.rs:34:5
+   |
+34 | /     pub unsafe fn raw_mut_ptr_deref_into_call(a: usize) {
+35 | |         let mut x = Foo { x: 0 };
+36 | |         let raw = &mut x as *mut Foo;
+37 | |         (*raw).amend();
+38 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region

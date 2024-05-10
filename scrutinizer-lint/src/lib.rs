@@ -19,6 +19,7 @@ extern crate rustc_span;
 extern crate rustc_target;
 extern crate rustc_trait_selection;
 
+use clippy_utils::diagnostics::span_lint_and_help;
 use regex::Regex;
 use rustc_hir::{Item, ItemKind};
 use rustc_lint::{LateContext, LateLintPass};
@@ -28,70 +29,42 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::Write;
 
-dylint_linting::declare_late_lint! {
-    /// ### What it does
-    ///
-    /// ### Why is this bad?
-    ///
-    /// ### Known problems
-    /// Remove if none.
-    ///
-    /// ### Example
-    /// ```rust
-    /// // example code where a warning is issued
-    /// ```
-    /// Use instead:
-    /// ```rust
-    /// // example code that does not raise a warning
-    /// ```
+dylint_linting::impl_late_lint! {
     pub SCRUTINIZER_LINT,
-    Warn,
-    "description goes here"
+    Deny,
+    "checks purity of allegedly pure regions",
+    ScrutinizerLint::new()
 }
 
-fn default_mode() -> String {
-    "functions".to_string()
-}
-
-fn default_only_inconsistent() -> bool {
-    false
-}
-
-fn default_output_file() -> String {
-    "analysis.result.json".to_string()
-}
-
-fn default_shallow() -> bool {
-    false
-}
-
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Default, Deserialize, Debug)]
 pub struct Config {
-    #[serde(default = "default_mode")]
-    mode: String,
-    #[serde(default = "default_only_inconsistent")]
-    only_inconsistent: bool,
-    #[serde(default = "default_output_file")]
-    output_file: String,
-    #[serde(default = "default_shallow")]
-    shallow: bool,
-
     target_filter: Option<String>,
     important_args: Option<Vec<usize>>,
     allowlist: Option<Vec<String>>,
     trusted_stdlib: Option<Vec<String>>,
 }
 
+struct ScrutinizerLint {
+    config: Config,
+}
+
+impl ScrutinizerLint {
+    pub fn new() -> Self {
+        eprintln!("--LINTSSTART--");
+        Self {
+            config: dylint_linting::config_or_default(env!("CARGO_PKG_NAME")),
+        }
+    }
+}
+
+impl Drop for ScrutinizerLint {
+    fn drop(&mut self) {
+        eprintln!("--LINTSEND--");
+    }
+}
+
 impl<'tcx> LateLintPass<'tcx> for ScrutinizerLint {
-    // A list of things you might check can be found here:
-    // https://doc.rust-lang.org/stable/nightly-rustc/rustc_lint/trait.LateLintPass.html
     fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx Item<'tcx>) {
-        let args = toml::from_str(
-            fs::read_to_string("scrutinizer-config.toml")
-                .unwrap()
-                .as_str(),
-        )
-        .unwrap();
         let tcx = cx.tcx;
         let selected_item = {
             let def_id = item.owner_id.to_def_id();
@@ -114,49 +87,48 @@ impl<'tcx> LateLintPass<'tcx> for ScrutinizerLint {
                     None
                 } else {
                     // Retrieve the instance, as we know it exists.
-                    Some((ty::Instance::mono(tcx, def_id), annotated_pure))
+                    Some(ty::Instance::mono(tcx, def_id))
                 }
             } else {
                 None
             }
         };
-        if let Some((instance, annotated_pure)) = selected_item {
-            let result = analyze_instance(
-                instance,
-                annotated_pure,
-                tcx,
-                &args,
-            );
-            if result.is_inconsistent() {
-                let output_string = serde_json::to_string_pretty(&result).unwrap();
-                println!("{}", output_string);
+        if let Some(instance) = selected_item {
+            let result = analyze_instance(instance, tcx, &self.config);
+            if !result.is_pure() {
+                span_lint_and_help(
+                    cx,
+                    SCRUTINIZER_LINT,
+                    item.span,
+                    "static analysis was not able to verify the purity of the region",
+                    None,
+                    "consider using sandbox or privacy region",
+                );
             }
-    
         }
     }
 }
 
 fn analyze_instance<'tcx>(
     instance: ty::Instance<'tcx>,
-    annotated_pure: bool,
     tcx: ty::TyCtxt<'tcx>,
-    args: &Config,
+    config: &Config,
 ) -> PurityAnalysisResult<'tcx> {
     let def_id = instance.def_id();
 
     match precheck(instance, tcx) {
         Err(reason) => {
-            return PurityAnalysisResult::error(def_id, reason, annotated_pure);
+            return PurityAnalysisResult::error(def_id, reason);
         }
         _ => {}
     };
 
-    let collector = Collector::collect(instance, tcx, args.shallow);
+    let collector = Collector::collect(instance, tcx, false);
 
     // Calculate important locals.
     let important_locals = {
         // Parse important arguments.
-        let important_args = if args.important_args.is_none() {
+        let important_args = if config.important_args.is_none() {
             // If no important arguments are provided, assume all are important.
             let arg_count = {
                 let body = instance.subst_mir_and_normalize_erasing_regions(
@@ -168,12 +140,12 @@ fn analyze_instance<'tcx>(
             };
             (1..=arg_count).collect()
         } else {
-            args.important_args.as_ref().unwrap().to_owned()
+            config.important_args.as_ref().unwrap().to_owned()
         };
         ImportantLocals::from_important_args(important_args, def_id, tcx)
     };
 
-    let allowlist = args
+    let allowlist = config
         .allowlist
         .as_ref()
         .unwrap_or(&vec![])
@@ -181,7 +153,7 @@ fn analyze_instance<'tcx>(
         .map(|re| Regex::new(re).unwrap())
         .collect();
 
-    let trusted_stdlib = args
+    let trusted_stdlib = config
         .trusted_stdlib
         .as_ref()
         .unwrap_or(&vec![])
@@ -193,17 +165,8 @@ fn analyze_instance<'tcx>(
         collector.get_function_info_storage(),
         collector.get_closure_info_storage(),
         important_locals,
-        annotated_pure,
         &allowlist,
         &trusted_stdlib,
         tcx,
     )
-}
-
-#[test]
-fn ui() {
-    dylint_testing::ui_test(
-        env!("CARGO_PKG_NAME"),
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ui"),
-    );
 }

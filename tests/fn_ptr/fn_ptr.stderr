@@ -1,0 +1,11 @@
+error: static analysis was not able to verify the purity of the region
+  --> fn_ptr.rs:10:5
+   |
+10 | /     pub fn fn_to_fn_ptr(data: usize) -> usize {
+11 | |         let fn_ptr: fn(usize) -> usize = foo;
+12 | |         fn_ptr(data)
+13 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+   = note: `#[deny(scrutinizer_lint)]` on by default

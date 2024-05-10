@@ -1,0 +1,10 @@
+[package]
+name = "structs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "structs.rs"
+
+[workspace.metadata.dylint]
+libraries = [{ path = "../../scrutinizer-lint" }]

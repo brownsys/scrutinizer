@@ -1,0 +1,10 @@
+[package]
+name = "fn_ptr"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "fn_ptr.rs"
+
+[workspace.metadata.dylint]
+libraries = [{ path = "../../scrutinizer-lint" }]

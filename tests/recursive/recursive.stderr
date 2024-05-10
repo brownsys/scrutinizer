@@ -1,0 +1,39 @@
+error: static analysis was not able to verify the purity of the region
+  --> recursive.rs:12:5
+   |
+12 | /     fn impure(a: usize) {
+13 | |         if a > 0 {
+14 | |             impure(a - 1);
+15 | |         }
+16 | |         println!("{}", a);
+17 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+   = note: `#[deny(scrutinizer_lint)]` on by default
+
+error: static analysis was not able to verify the purity of the region
+  --> recursive.rs:36:5
+   |
+36 | /     fn impure_1(a: usize) {
+37 | |         if a > 0 {
+38 | |             impure_2(a - 1);
+39 | |         }
+40 | |         println!("{}", a);
+41 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+  --> recursive.rs:44:5
+   |
+44 | /     fn impure_2(a: usize) {
+45 | |         if a > 0 {
+46 | |             impure_1(a - 1);
+47 | |         }
+48 | |         println!("{}", a);
+49 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region

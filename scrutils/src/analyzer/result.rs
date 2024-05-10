@@ -34,7 +34,6 @@ impl<'tcx> FunctionWithMetadata<'tcx> {
 
 pub struct PurityAnalysisResult<'tcx> {
     def_id: DefId,
-    annotated_pure: bool,
     status: bool,
     reason: String,
     passing: Vec<FunctionWithMetadata<'tcx>>,
@@ -45,7 +44,6 @@ pub struct PurityAnalysisResult<'tcx> {
 impl<'tcx> PurityAnalysisResult<'tcx> {
     pub fn new(
         def_id: DefId,
-        annotated_pure: bool,
         status: bool,
         reason: String,
         passing: Vec<FunctionWithMetadata<'tcx>>,
@@ -54,7 +52,6 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
     ) -> Self {
         Self {
             def_id,
-            annotated_pure,
             status,
             reason,
             passing,
@@ -63,10 +60,9 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
         }
     }
 
-    pub fn error(def_id: DefId, reason: String, annotated_pure: bool) -> Self {
+    pub fn error(def_id: DefId, reason: String) -> Self {
         Self::new(
             def_id,
-            annotated_pure,
             false,
             reason,
             vec![],
@@ -75,8 +71,8 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
         )
     }
 
-    pub fn is_inconsistent(&self) -> bool {
-        self.annotated_pure != self.status
+    pub fn is_pure(&self) -> bool {
+        self.status
     }
 
     pub fn def_id(&self) -> &DefId {
@@ -91,7 +87,6 @@ impl<'tcx> Serialize for PurityAnalysisResult<'tcx> {
     {
         let mut state = serializer.serialize_struct("PurityAnalysisResult", 7)?;
         state.serialize_field("def_id", format!("{:?}", self.def_id).as_str())?;
-        state.serialize_field("annotated_pure", &self.annotated_pure)?;
         state.serialize_field("status", &self.status)?;
         if !self.status {
             state.serialize_field("reason", &self.reason)?;

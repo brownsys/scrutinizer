@@ -1,0 +1,74 @@
+error: static analysis was not able to verify the purity of the region
+ --> leaky.rs:5:5
+  |
+5 | /     pub fn println_side_effect(left: usize, right: usize) -> usize {
+6 | |         println!("{} {}", left, right);
+7 | |         left + right
+8 | |     }
+  | |_____^
+  |
+  = help: consider using sandbox or privacy region
+  = note: `#[deny(scrutinizer_lint)]` on by default
+
+error: static analysis was not able to verify the purity of the region
+  --> leaky.rs:16:5
+   |
+16 | /     pub fn udp_socket_send(socket: &UdpSocket, buf: &[u8]) -> io::Result<usize> {
+17 | |         socket.send(buf)
+18 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+  --> leaky.rs:25:5
+   |
+25 | /     pub fn ref_cell_mut(refcell: &RefCell<usize>) {
+26 | |         *refcell.borrow_mut() = 10;
+27 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+  --> leaky.rs:42:5
+   |
+42 | /     pub fn sneaky_drop(data: usize) {
+43 | |         let sp = CustomSmartPointer { data };
+44 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+  --> leaky.rs:51:5
+   |
+51 | /     unsafe fn intrinsic_leaker(value: &u64, sink: &u64) {
+52 | |         let sink = sink as *const u64;
+53 | |         ptr::copy(value as *const u64, sink as *mut u64, 1);
+54 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+  --> leaky.rs:65:5
+   |
+65 | /     fn transmute_struct(value: u32, sink: StructImmut) {
+66 | |         let sink_mut: StructMut = unsafe { std::mem::transmute(sink) };
+67 | |         *sink_mut.field = value;
+68 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+  --> leaky.rs:71:5
+   |
+71 | /     fn transmute_arr(value: u32, sink: [&u32; 1]) {
+72 | |         let sink_mut: [&mut u32; 1] = unsafe { std::mem::transmute(sink) };
+73 | |         *sink_mut[0] = value;
+74 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region

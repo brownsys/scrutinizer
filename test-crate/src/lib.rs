@@ -4,7 +4,6 @@
 #![allow(dead_code, unused_variables)]
 
 mod collections;
-mod tests;
 
 macro_rules! redefine {
     (<$origin_ty:ty> :: $func_ident:ident => $($param_ident:ident : $param_ty:ty),* => $ret_ty:ty, $purity:expr) => {

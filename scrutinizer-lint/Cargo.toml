@@ -9,10 +9,6 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
-[[example]]
-name = "assign_op"
-path = "ui/assign_op.rs"
-
 [dependencies]
 clippy_utils = { git = "https://github.com/artemagvanian/rust-clippy-nightly-2023-04-12" }
 dylint_linting = "2.1.8"

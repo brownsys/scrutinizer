@@ -1,0 +1,22 @@
+error: static analysis was not able to verify the purity of the region
+  --> static.rs:7:5
+   |
+7  | /     fn leak_into_static(a: u32) {
+8  | |         unsafe {
+9  | |             GLOBAL_VEC.push(a);
+10 | |         }
+11 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+   = note: `#[deny(scrutinizer_lint)]` on by default
+
+error: static analysis was not able to verify the purity of the region
+  --> static.rs:41:5
+   |
+41 | /     fn impure_call_from_static(a: usize) -> usize {
+42 | |         IMPURE_INCREMENTER.inc(a)
+43 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region

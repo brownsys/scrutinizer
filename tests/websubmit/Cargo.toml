@@ -1,0 +1,15 @@
+[package]
+name = "websubmit"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "websubmit.rs"
+
+[dependencies]
+chrono = "0.4.0"
+mysql = "23.0.0"
+mysql_common = "0.22"
+
+[workspace.metadata.dylint]
+libraries = [{ path = "../../scrutinizer-lint" }]

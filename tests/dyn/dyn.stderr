@@ -1,0 +1,94 @@
+error: static analysis was not able to verify the purity of the region
+  --> dyn.rs:26:5
+   |
+26 | /     fn dyn_eraser(a: usize) -> usize {
+27 | |         let dynamic: &dyn DynamicTrait = if a == 0 {
+28 | |             &PureIncrementer {}
+29 | |         } else {
+...  |
+32 | |         dyn_eraser_helper(a, dynamic)
+33 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+   = note: `#[deny(scrutinizer_lint)]` on by default
+
+error: static analysis was not able to verify the purity of the region
+  --> dyn.rs:36:5
+   |
+36 | /     fn dyn_eraser_helper(a: usize, dynamic: &dyn DynamicTrait) -> usize {
+37 | |         dynamic.inc(a)
+38 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+  --> dyn.rs:49:5
+   |
+49 | /     fn execute(a: usize, cl: &dyn Fn(usize) -> usize) -> usize {
+50 | |         cl(a)
+51 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+  --> dyn.rs:67:5
+   |
+67 | /     fn execute(a: usize, cl: &dyn Fn(usize) -> usize) -> usize {
+68 | |         cl(a)
+69 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+  --> dyn.rs:90:5
+   |
+90 | /     fn execute(a: usize, cl: &dyn Fn(usize) -> usize) -> usize {
+91 | |         cl(a)
+92 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+   --> dyn.rs:109:5
+    |
+109 | /     fn execute(a: usize, cl: &dyn Fn(usize) -> usize) -> usize {
+110 | |         cl(a)
+111 | |     }
+    | |_____^
+    |
+    = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+   --> dyn.rs:114:5
+    |
+114 | /     fn hof(a: usize, cl: &dyn Fn(usize) -> usize) -> impl Fn(usize) -> usize + '_ {
+115 | |         move |x| cl(x + a)
+116 | |     }
+    | |_____^
+    |
+    = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+   --> dyn.rs:128:5
+    |
+128 | /     fn execute(a: usize, cl: &dyn Fn(usize) -> usize) -> usize {
+129 | |         cl(a)
+130 | |     }
+    | |_____^
+    |
+    = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+   --> dyn.rs:133:5
+    |
+133 | /     fn hof(a: usize, cl: &dyn Fn(usize) -> usize) -> Box<dyn Fn(usize) -> usize + '_> {
+134 | |         Box::new(move |x| cl(x + a))
+135 | |     }
+    | |_____^
+    |
+    = help: consider using sandbox or privacy region

@@ -1,0 +1,55 @@
+error: static analysis was not able to verify the purity of the region
+  --> vartrack.rs:5:5
+   |
+5  | /     pub fn implicit_leak(sensitive_arg: i32) {
+6  | |         let mut variable = 1;
+7  | |         // Implicit flow.
+8  | |         if sensitive_arg > 0 {
+...  |
+11 | |         println!("{}", variable);
+12 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+   = note: `#[deny(scrutinizer_lint)]` on by default
+
+error: static analysis was not able to verify the purity of the region
+  --> vartrack.rs:15:5
+   |
+15 | /     pub fn reassignment_leak(sensitive_arg: i32) {
+16 | |         let mut variable = sensitive_arg;
+17 | |         // Implicit flow.
+18 | |         if variable > 0 {
+...  |
+21 | |         println!("{}", variable);
+22 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+  --> vartrack.rs:29:5
+   |
+29 | /     pub fn arc_leak(sensitive_arg: i32) {
+30 | |         let sensitive_arc = Arc::new(Mutex::new(sensitive_arg));
+31 | |         let sensitive_arc_copy = sensitive_arc.clone();
+32 | |         let unwrapped = *sensitive_arc_copy.lock().unwrap();
+33 | |         println!("{}", unwrapped);
+34 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region
+
+error: static analysis was not able to verify the purity of the region
+  --> vartrack.rs:39:5
+   |
+39 | /     pub fn implicit_leak(sensitive_arg: i32) {
+40 | |         let mut variable = 1;
+41 | |         // Implicit flow.
+42 | |         if variable > 0 {
+...  |
+50 | |         println!("{}", variable);
+51 | |     }
+   | |_____^
+   |
+   = help: consider using sandbox or privacy region

@@ -140,7 +140,6 @@ pub fn run<'tcx>(
     functions: FunctionInfoStorage<'tcx>,
     closures: ClosureInfoStorage<'tcx>,
     important_locals: ImportantLocals,
-    annotated_pure: bool,
     allowlist: &Vec<Regex>,
     trusted_stdlib: &Vec<Regex>,
     tcx: TyCtxt<'tcx>,
@@ -164,7 +163,6 @@ pub fn run<'tcx>(
     if pure {
         PurityAnalysisResult::new(
             functions.origin().def_id(),
-            annotated_pure,
             true,
             String::new(),
             passing_calls,
@@ -174,7 +172,6 @@ pub fn run<'tcx>(
     } else {
         PurityAnalysisResult::new(
             functions.origin().def_id(),
-            annotated_pure,
             false,
             String::from("unable to ascertain purity of inner function call"),
             passing_calls,

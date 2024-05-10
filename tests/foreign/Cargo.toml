@@ -1,0 +1,13 @@
+[package]
+name = "foreign"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "foreign.rs"
+
+[dependencies]
+chrono = "0.4.0"
+
+[workspace.metadata.dylint]
+libraries = [{ path = "../../scrutinizer-lint" }]
