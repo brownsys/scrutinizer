@@ -96,7 +96,7 @@ fn analyze_item<'tcx>(
                             important_locals.transition(call.args(), call.def_id().to_owned(), tcx);
                         let call_fn_info = storage.get_by_call(call);
                         analyze_item(
-                            call_fn_info,
+                            &call_fn_info,
                             new_important_locals,
                             passing_calls_ref,
                             failing_calls_ref,
@@ -144,13 +144,13 @@ pub fn run<'tcx>(
     trusted_stdlib: &Vec<Regex>,
     tcx: TyCtxt<'tcx>,
 ) -> PurityAnalysisResult<'tcx> {
-    let origin = functions.get_with_body(functions.origin()).unwrap();
+    let origin = functions.get_with_body(&functions.origin()).unwrap();
 
     let mut passing_calls = vec![];
     let mut failing_calls = vec![];
 
     let pure = analyze_item(
-        origin,
+        &origin,
         important_locals,
         &mut passing_calls,
         &mut failing_calls,

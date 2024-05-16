@@ -1,3 +1,2 @@
 [workspace]
-members = ["scrutils"]
-exclude = ["test-crate", "scrutinizer-lint"]
+members = ["scrutils", "scrutinizer-lint"]

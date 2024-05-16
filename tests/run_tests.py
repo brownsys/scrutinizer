@@ -33,7 +33,8 @@ for subfolder in subfolders:
                               "--",
                               "-Z", "build-std",
                               "--target", "aarch64-apple-darwin"], env=dict(os.environ) | {
-            "RUSTFLAGS": "-Z always-encode-mir -Z nll-facts"}, capture_output=True)
+            "RUSTFLAGS": "-Z always-encode-mir -Z nll-facts",
+            "RUST_BACKTRACE": "1"}, capture_output=True)
 
         # Parse output between the markers.
         received_stderr = ret.stderr.decode().split("\n")

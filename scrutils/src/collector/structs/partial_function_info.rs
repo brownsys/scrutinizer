@@ -4,7 +4,7 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{self, TyCtxt};
 use std::iter::once;
 
-use crate::common::storage::ClosureInfoStorageRef;
+use crate::common::storage::ClosureInfoStorage;
 use crate::common::{ArgTys, ClosureInfo, TrackedTy};
 
 fn extract_arg_tys<'tcx>(instance: ty::Instance<'tcx>, tcx: TyCtxt<'tcx>) -> ArgTys<'tcx> {
@@ -56,7 +56,20 @@ pub enum PartialFunctionInfo<'tcx> {
 }
 
 impl<'tcx> PartialFunctionInfo<'tcx> {
-    pub fn new_function(instance: ty::Instance<'tcx>, tracked_args: ArgTys<'tcx>) -> Self {
+    pub fn new_function(instance: ty::Instance<'tcx>, tcx: TyCtxt<'tcx>) -> Self {
+        let body = instance.subst_mir_and_normalize_erasing_regions(
+            tcx,
+            ty::ParamEnv::reveal_all(),
+            tcx.instance_mir(instance.def).to_owned(),
+        );
+        let tracked_args = ArgTys::new(
+            (1..=body.arg_count)
+                .map(|local| {
+                    let arg_ty = body.local_decls[local.into()].ty;
+                    TrackedTy::from_ty(arg_ty)
+                })
+                .collect_vec(),
+        );
         Self::Function {
             instance,
             tracked_args,
@@ -106,7 +119,7 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
     fn assemble(
         instance: ty::Instance<'tcx>,
         arg_tys: &ArgTys<'tcx>,
-        closure_info_storage: ClosureInfoStorageRef<'tcx>,
+        closure_info_storage: ClosureInfoStorage<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> PartialFunctionInfo<'tcx> {
         let inferred_args = if tcx.is_closure(instance.def_id()) {
@@ -117,7 +130,7 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
         let provided_args = extract_arg_tys(instance, tcx);
         let merged_arg_tys = ArgTys::merge(inferred_args, provided_args);
         if tcx.is_closure(instance.def_id()) {
-            match closure_info_storage.borrow().get(&instance.def_id()) {
+            match closure_info_storage.get(&instance.def_id()) {
                 Some(closure_info) => PartialFunctionInfo::new_closure(
                     instance,
                     merged_arg_tys,
@@ -129,7 +142,10 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
                 ),
             }
         } else {
-            PartialFunctionInfo::new_function(instance, merged_arg_tys)
+            PartialFunctionInfo::Function {
+                instance,
+                tracked_args: merged_arg_tys,
+            }
         }
     }
 
@@ -176,7 +192,7 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
         def_id: DefId,
         substs: ty::SubstsRef<'tcx>,
         arg_tys: &ArgTys<'tcx>,
-        closure_info_storage: ClosureInfoStorageRef<'tcx>,
+        closure_info_storage: ClosureInfoStorage<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> Vec<PartialFunctionInfo<'tcx>> {
         // Resolve function instances that need to be analyzed.
@@ -220,15 +236,12 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
             .map(|fn_data| {
                 if !tcx.is_closure(fn_data.instance().def_id()) {
                     let resolved_instance = self.substitute(fn_data.instance().to_owned(), tcx);
-                    PartialFunctionInfo::new_function(
-                        resolved_instance,
-                        fn_data.tracked_args().to_owned(),
-                    )
+                    PartialFunctionInfo::Function {
+                        instance: resolved_instance,
+                        tracked_args: fn_data.tracked_args().to_owned(),
+                    }
                 } else {
-                    match closure_info_storage
-                        .borrow()
-                        .get(&fn_data.instance().def_id())
-                    {
+                    match closure_info_storage.get(&fn_data.instance().def_id()) {
                         Some(upvars) => {
                             let resolved_instance = upvars.extract_instance(tcx);
                             PartialFunctionInfo::new_closure(

@@ -1,23 +1,9 @@
 #![feature(rustc_private)]
 #![warn(unused_extern_crates)]
 
-extern crate rustc_arena;
-extern crate rustc_ast;
-extern crate rustc_ast_pretty;
-extern crate rustc_attr;
-extern crate rustc_data_structures;
-extern crate rustc_errors;
 extern crate rustc_hir;
-extern crate rustc_hir_pretty;
-extern crate rustc_index;
-extern crate rustc_infer;
-extern crate rustc_lexer;
 extern crate rustc_middle;
-extern crate rustc_mir_dataflow;
-extern crate rustc_parse;
 extern crate rustc_span;
-extern crate rustc_target;
-extern crate rustc_trait_selection;
 
 use clippy_utils::diagnostics::span_lint_and_help;
 use regex::Regex;
@@ -25,9 +11,7 @@ use rustc_hir::{Item, ItemKind};
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::ty;
 use scrutils::{precheck, run_analysis, Collector, ImportantLocals, PurityAnalysisResult};
-use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
-use std::io::Write;
+use serde::Deserialize;
 
 dylint_linting::impl_late_lint! {
     pub SCRUTINIZER_LINT,
@@ -169,9 +153,12 @@ fn analyze_instance<'tcx>(
         .map(|re| Regex::new(re).unwrap())
         .collect();
 
+    let function_info_storage = collector.get_function_info_storage();
+    let closure_info_storage = collector.get_closure_info_storage();
+
     run_analysis(
-        collector.get_function_info_storage(),
-        collector.get_closure_info_storage(),
+        function_info_storage,
+        closure_info_storage,
         important_locals,
         &allowlist,
         &trusted_stdlib,

@@ -32,15 +32,14 @@ impl<'tcx> FunctionInfo<'tcx> {
         places: HashMap<NormalizedPlace<'tcx>, TrackedTy<'tcx>>,
         calls: HashSet<FunctionCall<'tcx>>,
         body: Body<'tcx>,
-        span: Span,
         unhandled: HashSet<Ty<'tcx>>,
     ) -> Self {
         FunctionInfo::WithBody {
             instance,
             places,
             calls,
+            span: body.span,
             body,
-            span,
             unhandled,
         }
     }

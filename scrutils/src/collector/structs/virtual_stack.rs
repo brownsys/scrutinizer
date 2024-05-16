@@ -1,5 +1,6 @@
 use rustc_hir::def_id::DefId;
 
+use crate::collector::structs::PartialFunctionInfo;
 use crate::common::ArgTys;
 
 #[derive(Clone, Debug)]
@@ -28,10 +29,10 @@ pub struct VirtualStackItem<'tcx> {
 }
 
 impl<'tcx> VirtualStackItem<'tcx> {
-    pub fn new(def_id: DefId, tracked_args: ArgTys<'tcx>) -> Self {
+    pub fn new(func: &PartialFunctionInfo<'tcx>) -> Self {
         VirtualStackItem {
-            def_id,
-            tracked_args,
+            def_id: func.instance().def_id(),
+            tracked_args: func.tracked_args().to_owned(),
         }
     }
 }

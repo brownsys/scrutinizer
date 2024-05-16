@@ -4,14 +4,15 @@ use rustc_middle::ty::{self, TyCtxt};
 use std::collections::HashSet;
 
 use crate::collector::collector_domain::CollectorDomain;
-use crate::common::storage::ClosureInfoStorageRef;
+use crate::common::storage::ClosureInfoStorage;
 use crate::common::{NormalizedPlace, TrackedTy};
 
 pub trait HasTrackedTy<'tcx> {
+    /// Extracts a tracked type from the object.
     fn tracked_ty(
         &self,
         type_tracker: &mut CollectorDomain<'tcx>,
-        closure_info_storage: ClosureInfoStorageRef<'tcx>,
+        closure_info_storage: ClosureInfoStorage<'tcx>,
         instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> TrackedTy<'tcx>;
@@ -21,7 +22,7 @@ impl<'tcx> HasTrackedTy<'tcx> for Place<'tcx> {
     fn tracked_ty(
         &self,
         type_tracker: &mut CollectorDomain<'tcx>,
-        _closure_info_storage: ClosureInfoStorageRef<'tcx>,
+        _closure_info_storage: ClosureInfoStorage<'tcx>,
         instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> TrackedTy<'tcx> {
@@ -41,7 +42,7 @@ impl<'tcx> HasTrackedTy<'tcx> for Operand<'tcx> {
     fn tracked_ty(
         &self,
         type_tracker: &mut CollectorDomain<'tcx>,
-        closure_info_storage: ClosureInfoStorageRef<'tcx>,
+        closure_info_storage: ClosureInfoStorage<'tcx>,
         instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> TrackedTy<'tcx> {
@@ -70,7 +71,7 @@ impl<'tcx> HasTrackedTy<'tcx> for BinOpWithTys<'tcx> {
     fn tracked_ty(
         &self,
         _type_tracker: &mut CollectorDomain<'tcx>,
-        _closure_info_storage: ClosureInfoStorageRef<'tcx>,
+        _closure_info_storage: ClosureInfoStorage<'tcx>,
         _instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> TrackedTy<'tcx> {
@@ -100,7 +101,7 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
     fn tracked_ty(
         &self,
         type_tracker: &mut CollectorDomain<'tcx>,
-        closure_info_storage: ClosureInfoStorageRef<'tcx>,
+        closure_info_storage: ClosureInfoStorage<'tcx>,
         instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> TrackedTy<'tcx> {
@@ -253,12 +254,11 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                             )
                         })
                         .collect_vec();
-                    closure_info_storage
-                        .borrow_mut()
-                        .update_with(closure_ty, instance, upvar_tys, tcx);
+                    closure_info_storage.update_with(closure_ty, instance, upvar_tys, tcx);
                     TrackedTy::from_ty(closure_ty)
                 }
                 AggregateKind::Generator(..) => {
+                    // TODO: fixing this is required for async support.
                     panic!("generators are not supported")
                 }
             },
