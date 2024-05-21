@@ -25,4 +25,4 @@ pub use analyzer::{run as run_analysis, PurityAnalysisResult};
 pub use collector::Collector;
 pub use important::ImportantLocals;
 pub use precheck::precheck;
-pub use selector::{select_functions, select_pprs};
+pub use selector::select_pprs;

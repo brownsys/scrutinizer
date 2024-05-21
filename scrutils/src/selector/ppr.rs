@@ -1,7 +1,7 @@
-use rustc_hir::ConstContext;
 use rustc_middle::mir::visit::Visitor;
 use rustc_middle::mir::{Body, Location, Terminator, TerminatorKind};
 use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_span::def_id::DefId;
 
 struct PPRCollector<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -39,38 +39,22 @@ impl<'tcx> Visitor<'tcx> for PPRCollector<'tcx> {
     }
 }
 
-pub fn select_pprs<'tcx>(tcx: TyCtxt<'tcx>) -> Vec<(ty::Instance<'tcx>, bool)> {
-    tcx.mir_keys(())
-        .iter()
-        .map(
-            |local_def_id| match tcx.hir().body_const_context(local_def_id.to_owned()) {
-                Some(ConstContext::ConstFn) | None => {
-                    let pprs = tcx
-                        .optimized_mir(local_def_id.to_def_id())
-                        .collect_pprs(tcx);
+pub fn select_pprs<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Vec<ty::Instance<'tcx>> {
+    let pprs = tcx.optimized_mir(def_id).collect_pprs(tcx);
 
-                    pprs.into_iter()
-                        .map(|ppr| {
-                            if let ty::TyKind::Closure(def_id, substs_ref) = ppr.kind() {
-                                // Retrieve the instance, as we know it exists.
-                                (
-                                    ty::Instance::expect_resolve(
-                                        tcx,
-                                        ty::ParamEnv::reveal_all(),
-                                        def_id.to_owned(),
-                                        substs_ref,
-                                    ),
-                                    true,
-                                )
-                            } else {
-                                panic!("passed a non-closure to ppr constructor");
-                            }
-                        })
-                        .collect()
-                }
-                Some(_) => vec![],
-            },
-        )
-        .flatten()
+    pprs.into_iter()
+        .map(|ppr| {
+            if let ty::TyKind::Closure(def_id, substs_ref) = ppr.kind() {
+                // Retrieve the instance, as we know it exists.
+                ty::Instance::expect_resolve(
+                    tcx,
+                    ty::ParamEnv::reveal_all(),
+                    def_id.to_owned(),
+                    substs_ref,
+                )
+            } else {
+                panic!("passed a non-closure to ppr constructor");
+            }
+        })
         .collect()
 }

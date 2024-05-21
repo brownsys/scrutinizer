@@ -1,4 +1,5 @@
 [scrutinizer_lint]
+mode = "Test"
 allowlist = [
   # Prefetching.
   'core\[\w*\]::intrinsics::\{extern#0\}::prefetch_read_data',

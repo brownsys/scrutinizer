@@ -3,15 +3,16 @@
 
 extern crate rustc_hir;
 extern crate rustc_middle;
-extern crate rustc_span;
 
 use clippy_utils::diagnostics::span_lint_and_help;
 use regex::Regex;
 use rustc_hir::{Item, ItemKind};
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::ty;
-use scrutils::{precheck, run_analysis, Collector, ImportantLocals, PurityAnalysisResult};
-use serde::Deserialize;
+use scrutils::{
+    precheck, run_analysis, select_pprs, Collector, ImportantLocals, PurityAnalysisResult,
+};
+use serde::{Deserialize, Serialize};
 
 dylint_linting::impl_late_lint! {
     pub SCRUTINIZER_LINT,
@@ -20,9 +21,16 @@ dylint_linting::impl_late_lint! {
     ScrutinizerLint::new()
 }
 
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
+enum ScrutinizerMode {
+    #[default]
+    Lint,
+    Test,
+}
+
 #[derive(Default, Deserialize, Debug)]
 pub struct Config {
-    target_filter: Option<String>,
+    mode: ScrutinizerMode,
     important_args: Option<Vec<usize>>,
     allowlist: Option<Vec<String>>,
     trusted_stdlib: Option<Vec<String>>,
@@ -34,58 +42,64 @@ struct ScrutinizerLint {
 
 impl ScrutinizerLint {
     pub fn new() -> Self {
-        eprintln!("--LINTSSTART--");
-        Self {
+        let linter = Self {
             config: dylint_linting::config_or_default(env!("CARGO_PKG_NAME")),
-        }
+        };
+        if linter.config.mode == ScrutinizerMode::Test {
+            eprintln!("--LINTSSTART--");
+        };
+        linter
     }
 }
 
 impl Drop for ScrutinizerLint {
     fn drop(&mut self) {
-        eprintln!("--LINTSEND--");
+        if self.config.mode == ScrutinizerMode::Test {
+            eprintln!("--LINTSEND--");
+        }
     }
 }
 
 impl<'tcx> LateLintPass<'tcx> for ScrutinizerLint {
     fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx Item<'tcx>) {
         let tcx = cx.tcx;
-        let selected_item = {
+        let instances = {
             let def_id = item.owner_id.to_def_id();
-            let annotated_pure = tcx
-                .get_attr(def_id, rustc_span::symbol::Symbol::intern("doc"))
-                .and_then(|attr| attr.doc_str())
-                .and_then(|symbol| Some(symbol == rustc_span::symbol::Symbol::intern("pure")))
-                .unwrap_or(false);
-
             if let ItemKind::Fn(..) = &item.kind {
-                // Sanity check for generics.
-                let has_generics = ty::InternalSubsts::identity_for_item(tcx, def_id)
-                    .iter()
-                    .any(|param| match param.unpack() {
-                        ty::GenericArgKind::Lifetime(..) => false,
-                        ty::GenericArgKind::Type(..) | ty::GenericArgKind::Const(..) => true,
-                    });
+                match self.config.mode {
+                    ScrutinizerMode::Test => {
+                        // Sanity check for generics.
+                        let has_generics = ty::InternalSubsts::identity_for_item(tcx, def_id)
+                            .iter()
+                            .any(|param| match param.unpack() {
+                                ty::GenericArgKind::Lifetime(..) => false,
+                                ty::GenericArgKind::Type(..) | ty::GenericArgKind::Const(..) => {
+                                    true
+                                }
+                            });
 
-                if has_generics {
-                    span_lint_and_help(
-                        cx,
-                        SCRUTINIZER_LINT,
-                        item.span,
-                        "static analysis was not able to verify the purity of the region",
-                        None,
-                        "consider using sandbox or privacy region",
-                    );
-                    None
-                } else {
-                    // Retrieve the instance, as we know it exists.
-                    Some(ty::Instance::mono(tcx, def_id))
+                        if has_generics {
+                            span_lint_and_help(
+                                cx,
+                                SCRUTINIZER_LINT,
+                                item.span,
+                                "static analysis was not able to verify the purity of the region",
+                                None,
+                                "consider using sandbox or privacy region",
+                            );
+                            vec![]
+                        } else {
+                            // Retrieve the instance, as we know it exists.
+                            vec![ty::Instance::mono(tcx, def_id)]
+                        }
+                    }
+                    ScrutinizerMode::Lint => select_pprs(tcx, def_id),
                 }
             } else {
-                None
+                vec![]
             }
         };
-        if let Some(instance) = selected_item {
+        for instance in instances.into_iter() {
             let result = analyze_instance(instance, tcx, &self.config);
             if !result.is_pure() {
                 span_lint_and_help(
