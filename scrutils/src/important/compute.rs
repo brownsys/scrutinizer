@@ -1,9 +1,6 @@
-use crate::important::facts::LocalFacts;
-use crate::important::intern::InternerTables;
-use crate::important::location_table::LocationTableShim;
-use crate::important::tab_delim::load_tab_delimited_facts;
+use crate::important::aliases::Aliases;
+use crate::important::nll_facts::{create_location_table, load_facts_for_flowistry};
 
-use rustc_borrowck::BodyWithBorrowckFacts;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_middle::{
     dep_graph::DepContext,
@@ -11,20 +8,15 @@ use rustc_middle::{
     ty::TyCtxt,
 };
 
-use std::mem::transmute;
 use std::path::Path;
-use std::rc::Rc;
 
 use flowistry::{
     indexed::impls::LocationOrArg,
     infoflow::{Direction, FlowAnalysis},
-    mir::{aliases::Aliases, engine},
+    mir::engine,
 };
 
-use polonius_engine::Algorithm;
-use polonius_engine::Output as PoloniusEngineOutput;
-
-type Output = PoloniusEngineOutput<LocalFacts>;
+extern crate polonius_engine;
 
 // This function computes all locals that depend on the argument local for a given def_id.
 pub fn compute_dependent_locals<'tcx>(
@@ -35,10 +27,10 @@ pub fn compute_dependent_locals<'tcx>(
 ) -> Vec<Local> {
     // Retrieve optimized MIR body.
     // For foreign crate items, it would be saved during the crate's compilation.
-    let body = tcx.optimized_mir(def_id).to_owned();
+    let body = tcx.promoted_mir(def_id)[0].1;
 
     // Create the shimmed LocationTable, which is identical to the original LocationTable.
-    let location_table = LocationTableShim::new(&body);
+    let location_table = create_location_table(&body);
 
     // Find the directory with precomputed borrow checker facts for a given DefId.
     let facts_dir = {
@@ -63,29 +55,16 @@ pub fn compute_dependent_locals<'tcx>(
         }
     };
 
-    // Run polonius on the borrow checker facts.
-    let (input_facts, output_facts) = {
-        let tables = &mut InternerTables::new();
-        let all_facts = load_tab_delimited_facts(tables, &Path::new(&facts_dir)).unwrap();
-        let algorithm = Algorithm::Hybrid;
-        let output = Output::compute(&all_facts, algorithm, false);
-        (all_facts, output)
-    };
-
-    // Construct a body with borrow checker facts required for Flowistry.
-    let body_with_facts = BodyWithBorrowckFacts {
-        body,
-        input_facts: unsafe { transmute(input_facts) },
-        output_facts: Rc::new(unsafe { transmute(output_facts) }),
-        location_table: unsafe { transmute(location_table) },
-    };
+    let flowistry_facts =
+        load_facts_for_flowistry(&location_table, &Path::new(&facts_dir)).unwrap();
 
     // Run analysis on the body with with borrow checker facts.
     let results = {
-        let aliases = Aliases::build(tcx, def_id, &body_with_facts);
+        let aliases = Aliases::build(tcx, def_id, &body, &flowistry_facts);
         let location_domain = aliases.location_domain().clone();
-        let analysis = FlowAnalysis::new(tcx, def_id, &body_with_facts.body, aliases);
-        engine::iterate_to_fixpoint(tcx, &body_with_facts.body, location_domain, analysis)
+        let analysis =
+            FlowAnalysis::new(tcx, def_id, &body, unsafe { std::mem::transmute(aliases) });
+        engine::iterate_to_fixpoint(tcx, &body, location_domain, analysis)
     };
 
     // Use Flowistry to compute the locations and places influenced by the target.
@@ -104,7 +83,7 @@ pub fn compute_dependent_locals<'tcx>(
         .iter()
         .filter_map(|dep| match dep {
             LocationOrArg::Location(location) => {
-                let stmt_or_terminator = body_with_facts.body.stmt_at(*location);
+                let stmt_or_terminator = body.stmt_at(*location);
                 if stmt_or_terminator.is_left() {
                     stmt_or_terminator.left().and_then(|stmt| {
                         if let StatementKind::Assign(assign) = &stmt.kind {

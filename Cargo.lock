@@ -210,12 +210,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06ea2b9bc92be3c2baa9334a323ebca2d6f074ff852cd1d7b11064035cd3868f"
 
 [[package]]
-name = "datafrog"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0afaad2b26fa326569eb264b1363e8ae3357618c43982b3f285f0774ce76b69"
-
-[[package]]
 name = "either"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -444,17 +438,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "polonius-engine"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4e8e505342045d397d0b6674dcb82d6faf5cf40484d30eeb88fc82ef14e903f"
-dependencies = [
- "datafrog",
- "log",
- "rustc-hash",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -576,7 +559,6 @@ dependencies = [
  "itertools",
  "log",
  "petgraph",
- "polonius-engine",
  "regex",
  "rustc-hash",
  "rustc_utils 0.6.0-nightly-2023-04-12 (git+https://github.com/KinanBab/rustc_plugin.git?branch=main)",

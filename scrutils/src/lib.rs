@@ -1,5 +1,6 @@
 #![feature(box_patterns)]
 #![feature(rustc_private)]
+#![feature(min_specialization)]
 
 extern crate rustc_abi;
 extern crate rustc_borrowck;
@@ -11,7 +12,9 @@ extern crate rustc_infer;
 extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_mir_dataflow;
+extern crate rustc_serialize;
 extern crate rustc_span;
+extern crate rustc_target;
 extern crate rustc_trait_selection;
 
 mod analyzer;

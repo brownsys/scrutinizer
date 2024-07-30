@@ -1,8 +1,6 @@
+mod aliases;
 mod compute;
-mod facts;
 mod important;
-mod intern;
-mod location_table;
-mod tab_delim;
+mod nll_facts;
 
 pub use important::ImportantLocals;
