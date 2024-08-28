@@ -1,6 +1,9 @@
+use std::collections::HashSet;
+
 use rustc_hir::def_id::DefId;
 use serde::{ser::SerializeStruct, Serialize};
 
+use crate::analyzer::deps::compute_dep_strings_for_crates;
 use crate::common::storage::ClosureInfoStorage;
 use crate::common::FunctionInfo;
 use crate::important::ImportantLocals;
@@ -40,6 +43,7 @@ pub struct PurityAnalysisResult<'tcx> {
     passing: Vec<FunctionWithMetadata<'tcx>>,
     failing: Vec<FunctionWithMetadata<'tcx>>,
     closures: ClosureInfoStorage<'tcx>,
+    deps: HashSet<String>,
 }
 
 impl<'tcx> PurityAnalysisResult<'tcx> {
@@ -51,6 +55,7 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
         passing: Vec<FunctionWithMetadata<'tcx>>,
         failing: Vec<FunctionWithMetadata<'tcx>>,
         closures: ClosureInfoStorage<'tcx>,
+        deps: HashSet<String>,
     ) -> Self {
         Self {
             def_id,
@@ -60,6 +65,7 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
             passing,
             failing,
             closures,
+            deps,
         }
     }
 
@@ -72,6 +78,7 @@ impl<'tcx> PurityAnalysisResult<'tcx> {
             vec![],
             vec![],
             ClosureInfoStorage::new(),
+            HashSet::new(),
         )
     }
 
@@ -89,7 +96,7 @@ impl<'tcx> Serialize for PurityAnalysisResult<'tcx> {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("PurityAnalysisResult", 7)?;
+        let mut state = serializer.serialize_struct("PurityAnalysisResult", 8)?;
         state.serialize_field("def_id", format!("{:?}", self.def_id).as_str())?;
         state.serialize_field("annotated_pure", &self.annotated_pure)?;
         state.serialize_field("status", &self.status)?;
@@ -99,6 +106,7 @@ impl<'tcx> Serialize for PurityAnalysisResult<'tcx> {
         state.serialize_field("passing", &self.passing)?;
         state.serialize_field("failing", &self.failing)?;
         state.serialize_field("closures", &self.closures)?;
+        state.serialize_field("deps", &compute_dep_strings_for_crates(&self.deps))?;
         state.end()
     }
 }

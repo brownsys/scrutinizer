@@ -3,8 +3,10 @@ use regex::Regex;
 use rustc_middle::mir::{Mutability, VarDebugInfoContents};
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_span::symbol::Symbol;
+use std::collections::HashSet;
 
 use crate::analyzer::{
+    deps::compute_deps_for_body,
     heuristics::{HasRawPtrDeref, HasTransmute},
     result::{FunctionWithMetadata, PurityAnalysisResult},
 };
@@ -17,11 +19,21 @@ fn analyze_item<'tcx>(
     important_locals: ImportantLocals,
     passing_calls_ref: &mut Vec<FunctionWithMetadata<'tcx>>,
     failing_calls_ref: &mut Vec<FunctionWithMetadata<'tcx>>,
+    deps: &mut HashSet<String>,
     storage: &FunctionInfoStorage<'tcx>,
     allowlist: &Vec<Regex>,
     trusted_stdlib: &Vec<Regex>,
     tcx: TyCtxt<'tcx>,
 ) -> bool {
+    if let Some(instance) = item.instance() {
+        let body = instance.subst_mir_and_normalize_erasing_regions(
+            tcx,
+            ty::ParamEnv::reveal_all(),
+            tcx.instance_mir(instance.def).to_owned(),
+        );
+        deps.extend(compute_deps_for_body(body, tcx).into_iter());
+    }
+
     let is_trusted = {
         let def_path_str = format!("{:?}", item.def_id());
         let trusted_stdlib_member = trusted_stdlib.iter().any(|lib| lib.is_match(&def_path_str));
@@ -100,6 +112,7 @@ fn analyze_item<'tcx>(
                             new_important_locals,
                             passing_calls_ref,
                             failing_calls_ref,
+                            deps,
                             storage,
                             allowlist,
                             trusted_stdlib,
@@ -149,12 +162,14 @@ pub fn run<'tcx>(
 
     let mut passing_calls = vec![];
     let mut failing_calls = vec![];
+    let mut deps = HashSet::new();
 
     let pure = analyze_item(
         origin,
         important_locals,
         &mut passing_calls,
         &mut failing_calls,
+        &mut deps,
         &functions,
         allowlist,
         trusted_stdlib,
@@ -170,6 +185,7 @@ pub fn run<'tcx>(
             passing_calls,
             failing_calls,
             closures,
+            deps,
         )
     } else {
         PurityAnalysisResult::new(
@@ -180,6 +196,7 @@ pub fn run<'tcx>(
             passing_calls,
             failing_calls,
             closures,
+            deps,
         )
     }
 }

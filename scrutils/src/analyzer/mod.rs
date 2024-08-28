@@ -1,4 +1,5 @@
 mod analyzer;
+mod deps;
 mod heuristics;
 mod result;
 
