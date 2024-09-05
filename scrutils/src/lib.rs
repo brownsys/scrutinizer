@@ -21,7 +21,7 @@ mod important;
 mod precheck;
 mod selector;
 
-pub use analyzer::{run as run_analysis, PurityAnalysisResult};
+pub use analyzer::{run as run_analysis, PurityAnalysisResult, compute_deps_for_body, compute_dep_strings_for_crates};
 pub use collector::Collector;
 pub use important::ImportantLocals;
 pub use precheck::precheck;
