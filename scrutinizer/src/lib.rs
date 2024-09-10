@@ -197,7 +197,7 @@ impl rustc_driver::Callbacks for ScrutinizerCallbacks {
 
 // The entry point of analysis.
 fn scrutinizer<'tcx>(tcx: ty::TyCtxt<'tcx>, args: &Config) -> Vec<PurityAnalysisResult<'tcx>> {
-    let instances = if args.mode == "function" {
+    let instances: Vec<(ty::Instance<'tcx>, bool)> = if args.mode == "function" {
         select_functions(tcx)
     } else if args.mode == "ppr" {
         select_pprs(tcx)

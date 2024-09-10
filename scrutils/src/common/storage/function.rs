@@ -7,7 +7,7 @@ use crate::common::{FunctionCall, FunctionInfo};
 
 pub type FunctionInfoStorageRef<'tcx> = Rc<RefCell<FunctionInfoStorage<'tcx>>>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FunctionInfoStorage<'tcx> {
     origin: ty::Instance<'tcx>,
     fns: Vec<FunctionInfo<'tcx>>,
