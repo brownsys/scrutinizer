@@ -60,8 +60,8 @@ fn load_tab_delimited_file<Row>(tables: &mut InternerTables, path: &Path) -> io:
 where
     Row: for<'input> FromTabDelimited<'input>,
 {
-    match File::open(path) {
-        Ok(file) => io::BufReader::new(file)
+    File::open(path).and_then(|file| {
+        io::BufReader::new(file)
             .lines()
             .enumerate()
             .map(|(index, line)| {
@@ -83,12 +83,8 @@ where
 
                 Ok(row)
             })
-            .collect(),
-
-        Err(e) => {
-            panic!("Error opening file '{}': {}", path.display(), e);
-        }
-    }
+            .collect()
+    })
 }
 
 impl<'input, T> FromTabDelimited<'input> for T

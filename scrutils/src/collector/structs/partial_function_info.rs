@@ -108,7 +108,7 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
         arg_tys: &ArgTys<'tcx>,
         closure_info_storage: ClosureInfoStorageRef<'tcx>,
         tcx: TyCtxt<'tcx>,
-    ) -> PartialFunctionInfo<'tcx> {
+    ) -> Result<PartialFunctionInfo<'tcx>, String> {
         let inferred_args = if tcx.is_closure(instance.def_id()) {
             arg_tys.as_closure()
         } else {
@@ -118,18 +118,20 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
         let merged_arg_tys = ArgTys::merge(inferred_args, provided_args);
         if tcx.is_closure(instance.def_id()) {
             match closure_info_storage.borrow().get(&instance.def_id()) {
-                Some(closure_info) => PartialFunctionInfo::new_closure(
+                Some(closure_info) => Ok(PartialFunctionInfo::new_closure(
                     instance,
                     merged_arg_tys,
                     closure_info.to_owned(),
-                ),
-                None => panic!(
-                    "did not find a closure {:?} inside closure storage",
-                    instance.def_id()
-                ),
+                )),
+                None => {
+                    return Err(format!(
+                        "did not find a closure {:?} inside closure storage",
+                        instance.def_id()
+                    ))
+                }
             }
         } else {
-            PartialFunctionInfo::new_function(instance, merged_arg_tys)
+            Ok(PartialFunctionInfo::new_function(instance, merged_arg_tys))
         }
     }
 
@@ -178,7 +180,7 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
         arg_tys: &ArgTys<'tcx>,
         closure_info_storage: ClosureInfoStorageRef<'tcx>,
         tcx: TyCtxt<'tcx>,
-    ) -> Vec<PartialFunctionInfo<'tcx>> {
+    ) -> Result<Vec<PartialFunctionInfo<'tcx>>, String> {
         // Resolve function instances that need to be analyzed.
         let maybe_instance =
             ty::Instance::resolve(tcx, ty::ParamEnv::reveal_all(), def_id, substs).unwrap();
@@ -218,12 +220,13 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
 
         fns.into_iter()
             .map(|fn_data| {
+                let fn_data = fn_data?;
                 if !tcx.is_closure(fn_data.instance().def_id()) {
                     let resolved_instance = self.substitute(fn_data.instance().to_owned(), tcx);
-                    PartialFunctionInfo::new_function(
+                    Ok(PartialFunctionInfo::new_function(
                         resolved_instance,
                         fn_data.tracked_args().to_owned(),
-                    )
+                    ))
                 } else {
                     match closure_info_storage
                         .borrow()
@@ -231,22 +234,20 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
                     {
                         Some(upvars) => {
                             let resolved_instance = upvars.extract_instance(tcx);
-                            PartialFunctionInfo::new_closure(
+                            Ok(PartialFunctionInfo::new_closure(
                                 resolved_instance,
                                 fn_data.tracked_args().to_owned(),
                                 fn_data.expect_closure().to_owned(),
-                            )
+                            ))
                         }
-                        None => {
-                            panic!(
-                                "closure {:?} not inside the storage",
-                                fn_data.instance().def_id()
-                            );
-                        }
+                        None => Err(format!(
+                            "closure {:?} not inside the storage",
+                            fn_data.instance().def_id()
+                        )),
                     }
                 }
             })
-            .collect_vec()
+            .collect()
     }
 
     pub fn substitute<T: ty::TypeFoldable<TyCtxt<'tcx>>>(&self, t: T, tcx: TyCtxt<'tcx>) -> T {

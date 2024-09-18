@@ -70,6 +70,20 @@ impl<'tcx> TrackedTy<'tcx> {
         }
     }
 
+    pub fn try_map(
+        &self,
+        lambda: impl Fn(Ty<'tcx>) -> Result<Ty<'tcx>, String>,
+    ) -> Result<TrackedTy<'tcx>, String> {
+        match self {
+            TrackedTy::Present(ty) => Ok(TrackedTy::from_ty(lambda(ty.to_owned())?)),
+            TrackedTy::Erased(deps) => Ok(TrackedTy::Erased(
+                deps.iter()
+                    .map(|ty| lambda(ty.to_owned()))
+                    .collect::<Result<HashSet<_>, String>>()?,
+            )),
+        }
+    }
+
     pub fn spread_tuple(&self) -> Vec<TrackedTy<'tcx>> {
         match self {
             TrackedTy::Present(ty) => ty

@@ -15,7 +15,7 @@ fn refresh_and_project<'tcx>(
     place_ty: PlaceTy<'tcx>,
     projection_elem: &PlaceElem<'tcx>,
     tcx: TyCtxt<'tcx>,
-) -> PlaceTy<'tcx> {
+) -> Result<PlaceTy<'tcx>, String> {
     let new_projection = match projection_elem {
         ProjectionElem::Field(field_idx, ..) => {
             let fixed_projection = match place_ty.ty.kind() {
@@ -28,23 +28,45 @@ fn refresh_and_project<'tcx>(
                     tcx,
                 ),
                 _ => index_ty_field(place_ty, field_idx, tcx),
-            };
+            }?;
             debug!("projecting ty={:?}, proj={:?}", place_ty, fixed_projection);
             place_ty.projection_ty(tcx, fixed_projection)
+        }
+        ProjectionElem::Deref => {
+            if place_ty.ty.builtin_deref(true).is_none() {
+                return Err(format!(
+                    "projecting ty={:?}, but proj={:?} is invalid",
+                    place_ty, projection_elem
+                ));
+            } else {
+                debug!("projecting ty={:?}, proj={:?}", place_ty, projection_elem);
+                place_ty.projection_ty(tcx, projection_elem.to_owned())
+            }
+        }
+        ProjectionElem::Index(_) => {
+            if place_ty.ty.builtin_index().is_none() {
+                return Err(format!(
+                    "projecting ty={:?}, but proj={:?} is invalid",
+                    place_ty, projection_elem
+                ));
+            } else {
+                debug!("projecting ty={:?}, proj={:?}", place_ty, projection_elem);
+                place_ty.projection_ty(tcx, projection_elem.to_owned())
+            }
         }
         _ => {
             debug!("projecting ty={:?}, proj={:?}", place_ty, projection_elem);
             place_ty.projection_ty(tcx, projection_elem.to_owned())
         }
     };
-    new_projection
+    Ok(new_projection)
 }
 
 fn index_ty_field<'tcx>(
     place_ty: PlaceTy<'tcx>,
     field_idx: &FieldIdx,
     tcx: TyCtxt<'tcx>,
-) -> PlaceElem<'tcx> {
+) -> Result<PlaceElem<'tcx>, String> {
     let fixed_projection = match place_ty.ty.kind() {
         ty::TyKind::Adt(adt_def, adt_substs) => {
             let variant_idx = place_ty.variant_index.unwrap_or(VariantIdx::from_usize(0));
@@ -64,13 +86,13 @@ fn index_ty_field<'tcx>(
             ProjectionElem::Field(field_idx.to_owned(), fixed_ty.to_owned())
         }
         _ => {
-            panic!(
+            return Err(format!(
                 "field projection is not supported: ty={:?}, field_idx={:?}",
-                place_ty, field_idx,
-            );
+                place_ty, field_idx
+            ));
         }
     };
-    fixed_projection
+    Ok(fixed_projection)
 }
 
 #[derive(Debug, Clone)]
@@ -185,8 +207,8 @@ impl<'tcx> CollectorDomain<'tcx> {
         body: &Body<'tcx>,
         def_id: DefId,
         tcx: TyCtxt<'tcx>,
-    ) {
-        place
+    ) -> Result<(), String> {
+        let paths = place
             .interior_paths(tcx, body, def_id)
             .into_iter()
             .map(|interior_path| {
@@ -198,21 +220,25 @@ impl<'tcx> CollectorDomain<'tcx> {
                     .collect_vec();
 
                 let variant_index = place.ty(body, tcx).variant_index;
-                let transformed_ty = ty.map(|ty| {
+                let transformed_ty = ty.try_map(|ty| {
                     let initial_place = PlaceTy { ty, variant_index };
-                    projection_tail
+                    Ok(projection_tail
                         .iter()
-                        .fold(initial_place, |place_ty, projection_elem| {
-                            refresh_and_project(place_ty, projection_elem, tcx)
-                        })
-                        .ty
-                });
-                (interior_path, transformed_ty)
+                        .fold(Ok(initial_place), |place_ty, projection_elem| {
+                            place_ty.and_then(|place_ty| {
+                                refresh_and_project(place_ty, projection_elem, tcx)
+                            })
+                        })?
+                        .ty)
+                })?;
+                Ok((interior_path, transformed_ty))
             })
-            .for_each(|(interior_path, transformed_ty)| {
-                let mut_place = self.places.get_mut(&interior_path).unwrap();
-                mut_place.join(&transformed_ty);
-            });
+            .collect::<Result<Vec<_>, String>>()?;
+        for (interior_path, transformed_ty) in paths {
+            let mut_place = self.places.get_mut(&interior_path).unwrap();
+            mut_place.join(&transformed_ty);
+        }
+        Ok(())
     }
 
     pub fn update_with(

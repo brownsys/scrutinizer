@@ -184,8 +184,12 @@ impl<'tcx> Collector<'tcx> {
                 self.tcx,
             );
 
-            if !plausible_functions.is_empty() {
-                for function_data in plausible_functions.into_iter() {
+            if !plausible_functions
+                .as_ref()
+                .map(|fns| fns.is_empty())
+                .unwrap_or(true)
+            {
+                for function_data in plausible_functions.unwrap().into_iter() {
                     let def_id = function_data.instance().def_id();
 
                     // Skip if the call is repeated.
