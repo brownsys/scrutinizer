@@ -1,15 +1,16 @@
 use std::collections::HashSet;
 
-use flowistry::indexed::impls::LocationOrArg;
 use flowistry::infoflow::Direction;
 use itertools::Itertools;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{Local, Operand, Place};
 use rustc_middle::ty::TyCtxt;
+use rustc_utils::mir::location_or_arg::LocationOrArg;
 use rustc_utils::PlaceExt;
 use serde::ser::SerializeSeq;
 use serde::Serialize;
 
+use crate::body_cache::{is_mir_available, num_args_in_body};
 use crate::important::compute::compute_dependent_locals;
 
 // Newtype for a vec of locals.
@@ -66,23 +67,37 @@ impl ImportantLocals {
             return ImportantLocals::from_locals(HashSet::new());
         }
         // Construct targets of the arguments.
-        let important_args_to_callee = args_from_caller
-            .iter()
-            .enumerate()
-            .filter_map(|(i, arg)| {
-                arg.place()
-                    .and_then(|place| place.as_local())
-                    .and_then(|local| {
-                        if self.locals.contains(&local) {
-                            // Need to add 1 because arguments' locals start with 1.
-                            Some(Local::from_usize(i + 1))
-                        } else {
-                            None
-                        }
-                    })
-            })
-            .collect_vec();
-        if tcx.is_mir_available(callee_def_id) {
+        let important_args_to_callee = if tcx.is_closure(callee_def_id) {
+            // We need to propagate label to the closure arguments correctly, as they use a
+            // different calling convention.
+            if args_from_caller.len() == 2 {
+                (0..num_args_in_body(callee_def_id, tcx))
+                    .map(|i| Local::from_usize(i + 1))
+                    .collect_vec()
+            } else if args_from_caller.len() == 1 {
+                vec![Local::from_usize(1)]
+            } else {
+                panic!("Closure #args invariant violated.");
+            }
+        } else {
+            args_from_caller
+                .iter()
+                .enumerate()
+                .filter_map(|(i, arg)| {
+                    arg.place()
+                        .and_then(|place| place.as_local())
+                        .and_then(|local| {
+                            if self.locals.contains(&local) {
+                                // Need to add 1 because arguments' locals start with 1.
+                                Some(Local::from_usize(i + 1))
+                            } else {
+                                None
+                            }
+                        })
+                })
+                .collect_vec()
+        };
+        if is_mir_available(callee_def_id, tcx) {
             let new_important_arg_targets = vec![important_args_to_callee
                 .into_iter()
                 .map(|arg_local| {

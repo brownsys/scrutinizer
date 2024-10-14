@@ -16,12 +16,13 @@ pub fn select_functions<'tcx>(tcx: TyCtxt<'tcx>) -> Vec<(ty::Instance<'tcx>, boo
 
             if let ItemKind::Fn(..) = &item.kind {
                 // Sanity check for generics.
-                let has_generics = ty::InternalSubsts::identity_for_item(tcx, def_id)
-                    .iter()
-                    .any(|param| match param.unpack() {
-                        ty::GenericArgKind::Lifetime(..) => false,
-                        ty::GenericArgKind::Type(..) | ty::GenericArgKind::Const(..) => true,
-                    });
+                let has_generics =
+                    ty::GenericArgs::identity_for_item(tcx, def_id)
+                        .iter()
+                        .any(|param| match param.unpack() {
+                            ty::GenericArgKind::Lifetime(..) => false,
+                            ty::GenericArgKind::Type(..) | ty::GenericArgKind::Const(..) => true,
+                        });
 
                 if has_generics {
                     return None;

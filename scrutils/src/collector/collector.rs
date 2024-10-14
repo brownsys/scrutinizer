@@ -1,20 +1,20 @@
 use itertools::Itertools;
-use log::{debug, trace, warn};
+use log::{trace, warn};
 use rustc_middle::mir::{
-    BasicBlock, Body, Location, Operand, Place, Statement, StatementKind, Terminator,
-    TerminatorKind,
+    BasicBlock, Body, CallReturnPlaces, Location, Mutability, Operand, Place, Statement,
+    StatementKind, Terminator, TerminatorEdges, TerminatorKind,
 };
 use rustc_middle::ty::{self, Ty, TyCtxt};
-use rustc_mir_dataflow::{Analysis, AnalysisDomain, CallReturnPlaces, JoinSemiLattice};
+use rustc_mir_dataflow::{Analysis, AnalysisDomain, JoinSemiLattice};
 use rustc_utils::BodyExt;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::rc::Rc;
 
+use crate::body_cache::substituted_mir;
 use crate::collector::closure_collector::CollectClosures;
 use crate::collector::collector_domain::CollectorDomain;
-use crate::collector::dataflow_shim::iterate_to_fixpoint;
 use crate::collector::has_tracked_ty::HasTrackedTy;
 use crate::collector::structs::{PartialFunctionInfo, VirtualStack, VirtualStackItem};
 use crate::common::storage::{
@@ -45,11 +45,7 @@ impl<'tcx> Collector<'tcx> {
 
 impl<'tcx> Collector<'tcx> {
     pub fn collect(instance: ty::Instance<'tcx>, tcx: TyCtxt<'tcx>, shallow: bool) -> Self {
-        let body = instance.subst_mir_and_normalize_erasing_regions(
-            tcx,
-            ty::ParamEnv::reveal_all(),
-            tcx.instance_mir(instance.def).to_owned(),
-        );
+        let body = substituted_mir(&instance, tcx);
         let arg_tys = (1..=body.arg_count)
             .map(|local| {
                 let arg_ty = body.local_decls[local.into()].ty;
@@ -114,9 +110,11 @@ impl<'tcx> Collector<'tcx> {
         )
         .unwrap();
 
-        let mut cursor =
-            iterate_to_fixpoint(self.clone().into_engine(self.tcx, &self.substituted_body))
-                .into_results_cursor(&self.substituted_body);
+        let mut cursor = self
+            .clone()
+            .into_engine(self.tcx, &self.substituted_body)
+            .iterate_to_fixpoint()
+            .into_results_cursor(&self.substituted_body);
 
         self.substituted_body
             .basic_blocks
@@ -140,13 +138,7 @@ impl<'tcx> Collector<'tcx> {
         shallow: bool,
         tcx: TyCtxt<'tcx>,
     ) -> Self {
-        let substituted_body = current_function
-            .instance()
-            .subst_mir_and_normalize_erasing_regions(
-                tcx,
-                ty::ParamEnv::reveal_all(),
-                tcx.instance_mir(current_function.instance().def).to_owned(),
-            );
+        let substituted_body = substituted_mir(current_function.instance(), tcx);
         Collector {
             current_function,
             virtual_stack,
@@ -183,6 +175,11 @@ impl<'tcx> Collector<'tcx> {
                 self.closure_storage_ref.clone(),
                 self.tcx,
             );
+            trace!(
+                "plausible functions for {:?}: {:?}",
+                def_id,
+                plausible_functions
+            );
 
             if !plausible_functions
                 .as_ref()
@@ -214,19 +211,13 @@ impl<'tcx> Collector<'tcx> {
                             TrackedTy::from_ty(
                                 self.tcx
                                     .fn_sig(def_id)
-                                    .subst(self.tcx, function_data.instance().substs)
+                                    .instantiate(self.tcx, function_data.instance().args)
                                     .output()
                                     .skip_binder(),
                             )
                         }
                         _ => {
-                            let body = function_data.substitute(
-                                self.tcx
-                                    .instance_mir(function_data.instance().def)
-                                    .to_owned(),
-                                self.tcx,
-                            );
-
+                            let body = substituted_mir(function_data.instance(), self.tcx);
                             // Swap the current instance and continue recursively.
                             let results = Collector::new(
                                 function_data.clone(),
@@ -294,7 +285,7 @@ impl<'tcx> Collector<'tcx> {
                 ));
             }
         } else {
-            debug!("unhandled terminator");
+            warn!("unhandled terminator; function_ty={:?}", function_ty);
             state.add_unhandled(function_ty.to_owned());
         }
     }
@@ -343,7 +334,7 @@ impl<'tcx> AnalysisDomain<'tcx> for Collector<'tcx> {
 
 impl<'tcx> Analysis<'tcx> for Collector<'tcx> {
     fn apply_statement_effect(
-        &self,
+        &mut self,
         state: &mut CollectorDomain<'tcx>,
         statement: &Statement<'tcx>,
         _location: Location,
@@ -378,11 +369,11 @@ impl<'tcx> Analysis<'tcx> for Collector<'tcx> {
         }
     }
     fn apply_terminator_effect<'mir>(
-        &self,
+        &mut self,
         state: &mut CollectorDomain<'tcx>,
         terminator: &'mir Terminator<'tcx>,
         _location: Location,
-    ) {
+    ) -> TerminatorEdges<'mir, 'tcx> {
         match terminator.kind {
             TerminatorKind::Call {
                 ref func,
@@ -407,13 +398,19 @@ impl<'tcx> Analysis<'tcx> for Collector<'tcx> {
                     let destructor = self.tcx.adt_destructor(adt_def_id);
 
                     if let Some(destructor) = destructor {
-                        let destructor_function_ty =
-                            self.tcx.type_of(destructor.did).subst(self.tcx, substs);
+                        let destructor_function_ty = self
+                            .tcx
+                            .type_of(destructor.did)
+                            .instantiate(self.tcx, substs);
                         let destructor_args = &vec![Operand::Copy(place)];
                         let destructor_arg_tys =
-                            ArgTys::new(vec![TrackedTy::from_ty(self.tcx.mk_mut_ref(
-                                self.tcx.mk_region_from_kind(ty::RegionKind::ReErased),
-                                place.ty(&self.substituted_body, self.tcx).ty,
+                            ArgTys::new(vec![TrackedTy::from_ty(ty::Ty::new_ref(
+                                self.tcx,
+                                ty::Region::new_from_kind(self.tcx, ty::RegionKind::ReErased),
+                                ty::TypeAndMut {
+                                    ty: place.ty(&self.substituted_body, self.tcx).ty,
+                                    mutbl: Mutability::Mut,
+                                },
                             ))]);
 
                         self.process_call(
@@ -429,11 +426,12 @@ impl<'tcx> Analysis<'tcx> for Collector<'tcx> {
                 }
             }
             _ => {}
-        }
+        };
+        terminator.edges()
     }
 
     fn apply_call_return_effect(
-        &self,
+        &mut self,
         _state: &mut CollectorDomain<'tcx>,
         _block: BasicBlock,
         _return_places: CallReturnPlaces<'_, 'tcx>,

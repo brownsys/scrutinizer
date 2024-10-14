@@ -1,11 +1,15 @@
 use env_logger::Target;
-use std::fs::File;
+use std::fs::OpenOptions;
 
 fn main() {
     env_logger::builder()
         .target(Target::Pipe(Box::new(
-            File::create("scrutinizer.log").unwrap(),
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("scrutinizer.log")
+                .unwrap(),
         )))
         .init();
-    rustc_plugin::cli_main(scrutinizer::ScrutinizerPlugin, Some("+nightly-2023-04-12"));
+    rustc_plugin::cli_main(scrutinizer::ScrutinizerPlugin);
 }

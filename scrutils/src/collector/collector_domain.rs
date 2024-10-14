@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use log::debug;
+use log::{debug, trace, warn};
 use rustc_abi::{FieldIdx, VariantIdx};
 use rustc_middle::mir::{tcx::PlaceTy, Body, Local, Operand, Place, PlaceElem, ProjectionElem};
 use rustc_middle::ty::{self, Ty, TyCtxt};
@@ -29,7 +29,6 @@ fn refresh_and_project<'tcx>(
                 ),
                 _ => index_ty_field(place_ty, field_idx, tcx),
             }?;
-            debug!("projecting ty={:?}, proj={:?}", place_ty, fixed_projection);
             place_ty.projection_ty(tcx, fixed_projection)
         }
         ProjectionElem::Deref => {
@@ -39,7 +38,6 @@ fn refresh_and_project<'tcx>(
                     place_ty, projection_elem
                 ));
             } else {
-                debug!("projecting ty={:?}, proj={:?}", place_ty, projection_elem);
                 place_ty.projection_ty(tcx, projection_elem.to_owned())
             }
         }
@@ -50,14 +48,10 @@ fn refresh_and_project<'tcx>(
                     place_ty, projection_elem
                 ));
             } else {
-                debug!("projecting ty={:?}, proj={:?}", place_ty, projection_elem);
                 place_ty.projection_ty(tcx, projection_elem.to_owned())
             }
         }
-        _ => {
-            debug!("projecting ty={:?}, proj={:?}", place_ty, projection_elem);
-            place_ty.projection_ty(tcx, projection_elem.to_owned())
-        }
+        _ => place_ty.projection_ty(tcx, projection_elem.to_owned()),
     };
     Ok(new_projection)
 }
@@ -77,7 +71,7 @@ fn index_ty_field<'tcx>(
         }
         ty::TyKind::Closure(.., closure_substs) => {
             let closure_substs = closure_substs.as_closure();
-            let upvars = closure_substs.upvar_tys().collect_vec();
+            let upvars = closure_substs.upvar_tys().into_iter().collect_vec();
             let fixed_ty = upvars.get(field_idx.index()).unwrap();
             ProjectionElem::Field(field_idx.to_owned(), fixed_ty.to_owned())
         }
@@ -147,31 +141,42 @@ impl<'tcx> CollectorDomain<'tcx> {
 
     pub fn augment_closure_with_upvars(
         &mut self,
-        upvars: &ClosureInfo<'tcx>,
+        closure_info: &ClosureInfo<'tcx>,
         body: &Body<'tcx>,
         def_id: DefId,
         tcx: TyCtxt<'tcx>,
     ) {
-        upvars.upvars.iter().enumerate().for_each(|(i, upvar)| {
-            let type_placeholder = tcx.types.unit;
-            let projection = if body.local_decls[Local::from_usize(1)].ty.is_ref() {
-                vec![
-                    PlaceElem::Deref,
-                    PlaceElem::Field(FieldIdx::from_usize(i), type_placeholder),
-                ]
-            } else {
-                vec![PlaceElem::Field(FieldIdx::from_usize(i), type_placeholder)]
-            };
-            let upvar_place = Place::make(Local::from_usize(1), projection.as_slice(), tcx);
-            let normalized_upvar_place = NormalizedPlace::from_place(&upvar_place, tcx, def_id);
-            self.places
-                .entry(normalized_upvar_place.clone())
-                .and_modify(|place| {
-                    place.join(upvar);
-                })
-                .or_insert(upvar.to_owned());
-            self.propagate(&normalized_upvar_place, upvar, body, def_id, tcx);
-        });
+        closure_info
+            .upvars
+            .iter()
+            .enumerate()
+            .for_each(|(i, upvar)| {
+                let type_placeholder = tcx.types.unit;
+                let projection = if body.local_decls[Local::from_usize(1)].ty.is_ref() {
+                    vec![
+                        PlaceElem::Deref,
+                        PlaceElem::Field(FieldIdx::from_usize(i), type_placeholder),
+                    ]
+                } else {
+                    vec![PlaceElem::Field(FieldIdx::from_usize(i), type_placeholder)]
+                };
+                let upvar_place = Place::make(Local::from_usize(1), projection.as_slice(), tcx);
+                let normalized_upvar_place = NormalizedPlace::from_place(&upvar_place, tcx, def_id);
+                trace!(
+                    "injecting upvar={:?} for def_id={:?} into place={:?}",
+                    upvar,
+                    def_id,
+                    normalized_upvar_place
+                );
+                self.places
+                    .entry(normalized_upvar_place.clone())
+                    .and_modify(|place| {
+                        place.join(upvar);
+                    })
+                    .or_insert(upvar.to_owned());
+                self.propagate(&normalized_upvar_place, upvar, body, def_id, tcx)
+                    .unwrap();
+            });
     }
 
     pub fn augment_with_args(
@@ -196,7 +201,8 @@ impl<'tcx> CollectorDomain<'tcx> {
                         place.join(tracked_ty);
                     })
                     .or_insert(tracked_ty.to_owned());
-                self.propagate(&place, tracked_ty, body, def_id, tcx);
+                self.propagate(&place, tracked_ty, body, def_id, tcx)
+                    .unwrap();
             })
     }
 
@@ -211,6 +217,13 @@ impl<'tcx> CollectorDomain<'tcx> {
         let paths = place
             .interior_paths(tcx, body, def_id)
             .into_iter()
+            .chain(if ty.into_vec().into_iter().any(|ty| ty.is_ref()) {
+                // Consider Deref projection of a place as a part of propagation if place is a
+                // reference. 
+                vec![tcx.mk_place_elem(**place, ProjectionElem::Deref)]
+            } else {
+                vec![]
+            })
             .map(|interior_path| {
                 let interior_path = NormalizedPlace::from_place(&interior_path, tcx, def_id);
                 let projection_tail = interior_path
@@ -234,6 +247,12 @@ impl<'tcx> CollectorDomain<'tcx> {
                 Ok((interior_path, transformed_ty))
             })
             .collect::<Result<Vec<_>, String>>()?;
+        trace!(
+            "propagating place={:?} in def_id={:?}; paths={:?}",
+            place,
+            def_id,
+            paths
+        );
         for (interior_path, transformed_ty) in paths {
             let mut_place = self.places.get_mut(&interior_path).unwrap();
             mut_place.join(&transformed_ty);
@@ -253,7 +272,8 @@ impl<'tcx> CollectorDomain<'tcx> {
         place_ty_ref.join(&tracked_ty);
 
         let place_ty = place_ty_ref.to_owned();
-        self.propagate(&place, &place_ty, body, def_id, tcx);
+        self.propagate(&place, &place_ty, body, def_id, tcx)
+            .unwrap();
     }
 
     pub fn return_type(

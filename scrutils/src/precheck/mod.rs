@@ -2,15 +2,11 @@ use itertools::Itertools;
 use rustc_middle::mir::Mutability;
 use rustc_middle::ty::{self, TyCtxt};
 
+use crate::body_cache::substituted_mir;
 use crate::common::TrackedTy;
 
 pub fn precheck<'tcx>(instance: ty::Instance<'tcx>, tcx: TyCtxt<'tcx>) -> Result<(), String> {
-    let body = instance.subst_mir_and_normalize_erasing_regions(
-        tcx,
-        ty::ParamEnv::reveal_all(),
-        tcx.instance_mir(instance.def).to_owned(),
-    );
-
+    let body = substituted_mir(&instance, tcx);
     // Create initial argument types.
     let arg_tys = (1..=body.arg_count)
         .map(|local| {

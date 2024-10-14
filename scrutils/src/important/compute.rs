@@ -1,30 +1,18 @@
-use crate::important::facts::LocalFacts;
-use crate::important::intern::InternerTables;
-use crate::important::location_table::LocationTableShim;
-use crate::important::tab_delim::load_tab_delimited_facts;
-
-use rustc_borrowck::BodyWithBorrowckFacts;
-use rustc_hir::def_id::{DefId, LOCAL_CRATE};
+use log::trace;
+use rustc_hir::def_id::DefId;
 use rustc_middle::{
-    dep_graph::DepContext,
     mir::{Local, Place, StatementKind, TerminatorKind},
     ty::TyCtxt,
 };
 
-use std::mem::transmute;
-use std::path::Path;
-use std::rc::Rc;
-
 use flowistry::{
-    indexed::impls::LocationOrArg,
     infoflow::{Direction, FlowAnalysis},
-    mir::{aliases::Aliases, engine},
+    mir::{engine, placeinfo::PlaceInfo, FlowistryInput},
 };
 
-use polonius_engine::Algorithm;
-use polonius_engine::Output as PoloniusEngineOutput;
-
-type Output = PoloniusEngineOutput<LocalFacts>;
+use crate::body_cache::BodyCache;
+use either::Either;
+use rustc_utils::mir::location_or_arg::LocationOrArg;
 
 // This function computes all locals that depend on the argument local for a given def_id.
 pub fn compute_dependent_locals<'tcx>(
@@ -33,61 +21,22 @@ pub fn compute_dependent_locals<'tcx>(
     targets: Vec<Vec<(Place<'tcx>, LocationOrArg)>>,
     direction: Direction,
 ) -> Vec<Local> {
-    // Retrieve optimized MIR body.
-    // For foreign crate items, it would be saved during the crate's compilation.
-    let body = tcx.optimized_mir(def_id).to_owned();
+    let cache = BodyCache::new(tcx);
+    let body_with_facts = cache
+        .get(def_id)
+        .expect("Failed to read body information from disk.");
 
-    // Create the shimmed LocationTable, which is identical to the original LocationTable.
-    let location_table = LocationTableShim::new(&body);
+    let place_info = PlaceInfo::build(tcx, def_id, body_with_facts);
+    let location_domain = place_info.location_domain().clone();
 
-    // Find the directory with precomputed borrow checker facts for a given DefId.
-    let facts_dir = {
-        let def_path = tcx.def_path(def_id);
-        let nll_filename = def_path.to_filename_friendly_no_crate();
-        if def_id.krate == LOCAL_CRATE {
-            format!("./nll-facts/{}", nll_filename)
-        } else {
-            let core_def_id = {
-                let mut core_candidate = def_id;
-                while tcx.opt_parent(core_candidate).is_some() {
-                    core_candidate = tcx.opt_parent(core_candidate).unwrap();
-                }
-                core_candidate
-            };
-            let diagnostic_string = tcx
-                .sess()
-                .source_map()
-                .span_to_diagnostic_string(tcx.def_span(core_def_id));
-            let split_path = diagnostic_string.rsplit_once("/src").unwrap();
-            format!("{}/nll-facts/{}", split_path.0, nll_filename)
-        }
-    };
+    let body = body_with_facts.body();
 
-    // Run polonius on the borrow checker facts.
-    let (input_facts, output_facts) = {
-        let tables = &mut InternerTables::new();
-        let all_facts = load_tab_delimited_facts(tables, &Path::new(&facts_dir)).unwrap();
-        let algorithm = Algorithm::Hybrid;
-        let output = Output::compute(&all_facts, algorithm, false);
-        (all_facts, output)
-    };
-
-    // Construct a body with borrow checker facts required for Flowistry.
-    let body_with_facts = BodyWithBorrowckFacts {
-        body,
-        input_facts: unsafe { transmute(input_facts) },
-        output_facts: Rc::new(unsafe { transmute(output_facts) }),
-        location_table: unsafe { transmute(location_table) },
-    };
-
-    // Run analysis on the body with with borrow checker facts.
     let results = {
-        let aliases = Aliases::build(tcx, def_id, &body_with_facts);
-        let location_domain = aliases.location_domain().clone();
-        let analysis = FlowAnalysis::new(tcx, def_id, &body_with_facts.body, aliases);
-        engine::iterate_to_fixpoint(tcx, &body_with_facts.body, location_domain, analysis)
+        let analysis = FlowAnalysis::new(tcx, def_id, body, place_info);
+        engine::iterate_to_fixpoint(tcx, body, location_domain, analysis)
     };
 
+    trace!("computing location dependencies for {:?}, {:?}", def_id, targets);
     // Use Flowistry to compute the locations and places influenced by the target.
     let location_deps =
         flowistry::infoflow::compute_dependencies(&results, targets.clone(), direction)
@@ -102,29 +51,32 @@ pub fn compute_dependent_locals<'tcx>(
     // Merge location dependencies and extract locals from them.
     location_deps
         .iter()
-        .filter_map(|dep| match dep {
+        .map(|dep| match dep {
             LocationOrArg::Location(location) => {
-                let stmt_or_terminator = body_with_facts.body.stmt_at(*location);
-                if stmt_or_terminator.is_left() {
-                    stmt_or_terminator.left().and_then(|stmt| {
-                        if let StatementKind::Assign(assign) = &stmt.kind {
+                let stmt_or_terminator = body_with_facts.body().stmt_at(*location);
+                match stmt_or_terminator {
+                    Either::Left(stmt) => match &stmt.kind {
+                        StatementKind::Assign(assign) => {
                             let (place, _) = **assign;
-                            Some(place.local)
-                        } else {
-                            None
+                            vec![place.local]
                         }
-                    })
-                } else {
-                    stmt_or_terminator.right().and_then(|terminator| {
-                        if let TerminatorKind::Call { destination, .. } = &terminator.kind {
-                            Some(destination.local)
-                        } else {
-                            None
+                        _ => {
+                            unimplemented!()
                         }
-                    })
+                    },
+                    Either::Right(terminator) => match &terminator.kind {
+                        TerminatorKind::Call { destination, .. } => {
+                            vec![destination.local]
+                        }
+                        TerminatorKind::SwitchInt { .. } => vec![],
+                        _ => {
+                            unimplemented!()
+                        }
+                    },
                 }
             }
-            LocationOrArg::Arg(local) => Some(*local),
+            LocationOrArg::Arg(local) => vec![*local],
         })
+        .flatten()
         .collect()
 }

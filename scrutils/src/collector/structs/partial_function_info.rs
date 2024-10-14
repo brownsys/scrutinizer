@@ -1,9 +1,10 @@
 use itertools::Itertools;
 use log::trace;
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::{self, EarlyBinder, TyCtxt};
 use std::iter::once;
 
+use crate::body_cache::is_mir_available;
 use crate::common::storage::ClosureInfoStorageRef;
 use crate::common::{ArgTys, ClosureInfo, TrackedTy};
 
@@ -13,7 +14,7 @@ fn extract_arg_tys<'tcx>(instance: ty::Instance<'tcx>, tcx: TyCtxt<'tcx>) -> Arg
         ty::FnDef(_, _) => {
             let sig = tcx
                 .fn_sig(instance.def_id())
-                .subst(tcx, instance.substs)
+                .instantiate(tcx, instance.args)
                 .skip_binder();
             let arg_tys = sig
                 .inputs()
@@ -31,9 +32,11 @@ fn extract_arg_tys<'tcx>(instance: ty::Instance<'tcx>, tcx: TyCtxt<'tcx>) -> Arg
                 .iter()
                 .map(|ty| TrackedTy::from_ty(ty.to_owned()).spread_tuple())
                 .flatten();
-            let arg_tys = once(TrackedTy::from_ty(
-                tcx.mk_imm_ref(tcx.mk_region_from_kind(ty::ReErased), ty),
-            ))
+            let arg_tys = once(TrackedTy::from_ty(ty::Ty::new_imm_ref(
+                tcx,
+                ty::Region::new_from_kind(tcx, ty::ReErased),
+                ty,
+            )))
             .chain(sig_tys)
             .collect();
             ArgTys::new(arg_tys)
@@ -138,12 +141,12 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
     fn find_plausible_instances(
         def_id: DefId,
         arg_tys: &ArgTys<'tcx>,
-        substs: ty::SubstsRef<'tcx>,
+        substs: &ty::GenericArgs<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> Vec<ty::Instance<'tcx>> {
         let generic_tys = tcx
             .fn_sig(def_id)
-            .subst_identity()
+            .instantiate_identity()
             .inputs()
             .skip_binder()
             .to_vec();
@@ -166,7 +169,7 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
         tcx: TyCtxt<'tcx>,
     ) -> Option<ty::Instance<'tcx>> {
         // Check if every substitution is a type.
-        let new_substs: ty::SubstsRef = tcx.mk_substs(substs.as_slice());
+        let new_substs = tcx.mk_args(substs.as_slice());
         let new_instance =
             ty::Instance::resolve(tcx, ty::ParamEnv::reveal_all(), def_id, new_substs).unwrap();
         new_instance
@@ -176,7 +179,7 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
     pub fn resolve(
         &self,
         def_id: DefId,
-        substs: ty::SubstsRef<'tcx>,
+        substs: &'tcx ty::GenericArgs<'tcx>,
         arg_tys: &ArgTys<'tcx>,
         closure_info_storage: ClosureInfoStorageRef<'tcx>,
         tcx: TyCtxt<'tcx>,
@@ -190,7 +193,7 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
             None => def_id,
         };
 
-        let fns = if tcx.is_mir_available(def_id) {
+        let fns = if is_mir_available(def_id, tcx) {
             vec![PartialFunctionInfo::assemble(
                 maybe_instance.unwrap(),
                 &arg_tys,
@@ -250,8 +253,11 @@ impl<'tcx> PartialFunctionInfo<'tcx> {
             .collect()
     }
 
-    pub fn substitute<T: ty::TypeFoldable<TyCtxt<'tcx>>>(&self, t: T, tcx: TyCtxt<'tcx>) -> T {
-        self.instance()
-            .subst_mir_and_normalize_erasing_regions(tcx, ty::ParamEnv::reveal_all(), t)
+    pub fn substitute<T: ty::TypeFoldable<TyCtxt<'tcx>> + Copy>(
+        &self,
+        t: T,
+        tcx: TyCtxt<'tcx>,
+    ) -> T {
+        self.instance().subst_mir(tcx, EarlyBinder::bind(&t))
     }
 }

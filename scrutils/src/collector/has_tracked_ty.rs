@@ -3,6 +3,7 @@ use rustc_middle::mir::{AggregateKind, BinOp, CastKind, NullOp, Operand, Place, 
 use rustc_middle::ty::{self, TyCtxt};
 use std::collections::HashSet;
 
+use crate::body_cache::substituted_mir;
 use crate::collector::collector_domain::CollectorDomain;
 use crate::common::storage::ClosureInfoStorageRef;
 use crate::common::{NormalizedPlace, TrackedTy};
@@ -25,11 +26,7 @@ impl<'tcx> HasTrackedTy<'tcx> for Place<'tcx> {
         instance: &ty::Instance<'tcx>,
         tcx: TyCtxt<'tcx>,
     ) -> TrackedTy<'tcx> {
-        let body = instance.subst_mir_and_normalize_erasing_regions(
-            tcx,
-            ty::ParamEnv::reveal_all(),
-            tcx.instance_mir(instance.def).to_owned(),
-        );
+        let body = substituted_mir(instance, tcx);
         type_tracker
             .get(&NormalizedPlace::from_place(self, tcx, instance.def_id()))
             .and_then(|ty| Some(ty.to_owned()))
@@ -82,7 +79,12 @@ impl<'tcx> HasTrackedTy<'tcx> for BinOpWithTys<'tcx> {
             | BinOp::Rem
             | BinOp::BitXor
             | BinOp::BitAnd
-            | BinOp::BitOr => {
+            | BinOp::BitOr
+            | BinOp::AddUnchecked
+            | BinOp::MulUnchecked
+            | BinOp::ShlUnchecked
+            | BinOp::ShrUnchecked
+            | BinOp::SubUnchecked => {
                 assert_eq!(self.lhs_ty, self.rhs_ty);
                 self.lhs_ty.to_owned()
             }
@@ -111,7 +113,7 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
             Rvalue::Repeat(ref operand, count) => {
                 let tracked_ty =
                     operand.tracked_ty(type_tracker, closure_info_storage.clone(), instance, tcx);
-                tracked_ty.map(|ty| tcx.mk_array_with_const_len(ty, count))
+                tracked_ty.map(|ty| ty::Ty::new_array_with_const_len(tcx, ty, count))
             }
             Rvalue::ThreadLocalRef(did) => {
                 let ty = tcx.thread_local_ptr_ty(did);
@@ -121,7 +123,8 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                 let place_tracked_ty =
                     place.tracked_ty(type_tracker, closure_info_storage.clone(), instance, tcx);
                 place_tracked_ty.map(|place_ty| {
-                    tcx.mk_ref(
+                    ty::Ty::new_ref(
+                        tcx,
                         reg,
                         ty::TypeAndMut {
                             ty: place_ty,
@@ -134,10 +137,13 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                 let place_tracked_ty =
                     place.tracked_ty(type_tracker, closure_info_storage.clone(), instance, tcx);
                 place_tracked_ty.map(|place_ty| {
-                    tcx.mk_ptr(ty::TypeAndMut {
-                        ty: place_ty,
-                        mutbl: mutability,
-                    })
+                    ty::Ty::new_ptr(
+                        tcx,
+                        ty::TypeAndMut {
+                            ty: place_ty,
+                            mutbl: mutability,
+                        },
+                    )
                 })
             }
             Rvalue::Len(..) => TrackedTy::from_ty(tcx.types.usize),
@@ -181,7 +187,7 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                     instance,
                     tcx,
                 );
-                tracked_ty.map(|ty| tcx.mk_tup(&[ty, tcx.types.bool]))
+                tracked_ty.map(|ty| ty::Ty::new_tup(tcx, &[ty, tcx.types.bool]))
             }
             Rvalue::UnaryOp(UnOp::Not | UnOp::Neg, ref operand) => {
                 operand.tracked_ty(type_tracker, closure_info_storage.clone(), instance, tcx)
@@ -191,11 +197,13 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                     place.tracked_ty(type_tracker, closure_info_storage.clone(), instance, tcx);
                 place_tracked_ty.map(|ty| ty.discriminant_ty(tcx))
             }
-            Rvalue::NullaryOp(NullOp::SizeOf | NullOp::AlignOf, _) => {
+            Rvalue::NullaryOp(NullOp::SizeOf | NullOp::AlignOf | NullOp::OffsetOf(_), _) => {
                 TrackedTy::from_ty(tcx.types.usize)
             }
             Rvalue::Aggregate(ref ak, ref ops) => match **ak {
-                AggregateKind::Array(ty) => TrackedTy::from_ty(tcx.mk_array(ty, ops.len() as u64)),
+                AggregateKind::Array(ty) => {
+                    TrackedTy::from_ty(ty::Ty::new_array(tcx, ty, ops.len() as u64))
+                }
                 AggregateKind::Tuple => {
                     let op_tys = ops
                         .iter()
@@ -215,7 +223,7 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                             TrackedTy::Present(ty) => ty.to_owned(),
                             _ => unreachable!(),
                         });
-                        TrackedTy::from_ty(tcx.mk_tup_from_iter(ops))
+                        TrackedTy::from_ty(ty::Ty::new_tup_from_iter(tcx, ops))
                     } else {
                         let deps = HashSet::from_iter(
                             op_tys
@@ -227,21 +235,18 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                                     }
                                 })
                                 .multi_cartesian_product()
-                                .map(|tuple| tcx.mk_tup_from_iter(tuple.into_iter())),
+                                .map(|tuple| ty::Ty::new_tup_from_iter(tcx, tuple.into_iter())),
                         );
                         TrackedTy::Erased(deps)
                     };
                     transformed_ty
                 }
-                AggregateKind::Adt(did, _, substs, _, _) => {
-                    TrackedTy::from_ty(instance.subst_mir_and_normalize_erasing_regions(
-                        tcx,
-                        ty::ParamEnv::reveal_all(),
-                        tcx.type_of(did).subst(tcx, substs),
-                    ))
-                }
+                AggregateKind::Adt(did, _, args, _, _) => TrackedTy::from_ty(instance.subst_mir(
+                    tcx,
+                    ty::EarlyBinder::bind(&tcx.type_of(did).instantiate(tcx, args)),
+                )),
                 AggregateKind::Closure(did, substs) => {
-                    let closure_ty = tcx.mk_closure(did, substs);
+                    let closure_ty = ty::Ty::new_closure(tcx, did, substs);
                     let upvar_tys = ops
                         .into_iter()
                         .map(|operand| {
@@ -262,7 +267,7 @@ impl<'tcx> HasTrackedTy<'tcx> for Rvalue<'tcx> {
                     panic!("generators are not supported")
                 }
             },
-            Rvalue::ShallowInitBox(_, ty) => TrackedTy::from_ty(tcx.mk_box(ty)),
+            Rvalue::ShallowInitBox(_, ty) => TrackedTy::from_ty(ty::Ty::new_box(tcx, ty)),
             Rvalue::CopyForDeref(ref place) => {
                 place.tracked_ty(type_tracker, closure_info_storage.clone(), instance, tcx)
             }

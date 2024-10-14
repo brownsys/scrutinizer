@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use regex::Regex;
 use rustc_middle::mir::{Mutability, VarDebugInfoContents};
-use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::TyCtxt;
 use rustc_span::symbol::Symbol;
 use std::collections::HashSet;
 
@@ -10,6 +10,7 @@ use crate::analyzer::{
     heuristics::{HasRawPtrDeref, HasTransmute},
     result::{FunctionWithMetadata, PurityAnalysisResult},
 };
+use crate::body_cache::substituted_mir;
 use crate::common::storage::{ClosureInfoStorage, FunctionInfoStorage};
 use crate::common::FunctionInfo;
 use crate::important::ImportantLocals;
@@ -26,11 +27,7 @@ fn analyze_item<'tcx>(
     tcx: TyCtxt<'tcx>,
 ) -> bool {
     if let Some(instance) = item.instance() {
-        let body = instance.subst_mir_and_normalize_erasing_regions(
-            tcx,
-            ty::ParamEnv::reveal_all(),
-            tcx.instance_mir(instance.def).to_owned(),
-        );
+        let body = substituted_mir(&instance, tcx);
         deps.extend(compute_deps_for_body(body, tcx).into_iter());
     }
 
@@ -38,11 +35,7 @@ fn analyze_item<'tcx>(
         let def_path_str = format!("{:?}", item.def_id());
         let trusted_stdlib_member = trusted_stdlib.iter().any(|lib| lib.is_match(&def_path_str));
         let self_ty = item.instance().and_then(|instance| {
-            let body = instance.subst_mir_and_normalize_erasing_regions(
-                tcx,
-                ty::ParamEnv::reveal_all(),
-                tcx.instance_mir(instance.def).to_owned(),
-            );
+            let body = substituted_mir(&instance, tcx);
             body.var_debug_info
                 .iter()
                 .find(|dbg_info| dbg_info.name == Symbol::intern("self"))

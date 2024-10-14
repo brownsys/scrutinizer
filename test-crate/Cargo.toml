@@ -5,14 +5,3 @@ edition = "2021"
 
 [dependencies]
 chrono = "0.4.0"
-mysql = "23.0.0"
-mysql_common = "0.22"
-rocket = { git = "https://github.com/KinanBab/Rocket.git", branch = "main" }
-
-[dependencies.rocket_dyn_templates]
-git = "https://github.com/KinanBab/Rocket.git"
-branch = "main"
-features = ["handlebars", "tera"]
-
-[dependencies.handlebars]
-features = ["dir_source"]

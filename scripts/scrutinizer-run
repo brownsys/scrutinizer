@@ -1,0 +1,9 @@
+#!/bin/bash
+
+export RUST_BACKTRACE=full
+export RUST_LOG=scrutinizer=trace,scrutils=trace
+
+cd $1 \
+    && > scrutinizer.log \
+    && cargo clean \
+    && cargo scrutinizer --config-path=$2

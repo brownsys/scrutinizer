@@ -1,4 +1,5 @@
 use itertools::Itertools;
+use log::warn;
 use rustc_middle::ty::{self, Ty};
 
 use crate::common::TrackedTy;
@@ -26,7 +27,12 @@ impl<'tcx> ArgTys<'tcx> {
     }
 
     pub fn merge(inferred_args: ArgTys<'tcx>, provided_args: ArgTys<'tcx>) -> ArgTys<'tcx> {
-        assert!(inferred_args.arg_tys.len() == provided_args.arg_tys.len());
+        if inferred_args.arg_tys.len() != provided_args.arg_tys.len() {
+            warn!("inferred argument length != provided argument length; inferred_args={:?}; provided_args={:?}", inferred_args, provided_args);
+            return ArgTys {
+                arg_tys: inferred_args.arg_tys,
+            };
+        }
         let merged_arg_tys = inferred_args
             .arg_tys
             .into_iter()

@@ -1,5 +1,4 @@
-#![feature(box_patterns)]
-#![feature(rustc_private)]
+#![feature(rustc_private, box_patterns, min_specialization)]
 
 extern crate rustc_abi;
 extern crate rustc_borrowck;
@@ -11,12 +10,13 @@ extern crate rustc_infer;
 extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_mir_dataflow;
+extern crate rustc_session;
 extern crate rustc_span;
 extern crate rustc_trait_selection;
 
 use scrutils::{
-    precheck, run_analysis, select_functions, select_pprs, Collector, ImportantLocals,
-    PurityAnalysisResult,
+    dump_mir_and_borrowck_facts, substituted_mir, precheck, run_analysis, select_functions,
+    select_pprs, Collector, ImportantLocals, PurityAnalysisResult,
 };
 
 use chrono::offset::Local;
@@ -25,7 +25,9 @@ use log::trace;
 use regex::Regex;
 use rustc_middle::ty;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
+use rustc_session::EarlyErrorHandler;
 use rustc_span::def_id::LOCAL_CRATE;
+use rustc_utils::mir::borrowck_facts;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::env;
@@ -77,6 +79,31 @@ pub struct Config {
     trusted_stdlib: Option<Vec<String>>,
 }
 
+enum CrateHandling {
+    JustCompile,
+    CompileAndDump,
+    Analyze,
+}
+
+fn how_to_handle_this_crate(
+    _plugin_args: &Config,
+    compiler_args: &mut Vec<String>,
+) -> CrateHandling {
+    let crate_name = compiler_args
+        .iter()
+        .enumerate()
+        .find_map(|(i, s)| (s == "--crate-name").then_some(i))
+        .and_then(|i| compiler_args.get(i + 1))
+        .cloned();
+
+    match &crate_name {
+        Some(krate) if krate == "build_script_build" => CrateHandling::JustCompile,
+        _ if std::env::var("CARGO_PRIMARY_PACKAGE").is_ok() => CrateHandling::Analyze,
+        Some(_) => CrateHandling::CompileAndDump,
+        _ => CrateHandling::JustCompile,
+    }
+}
+
 impl RustcPlugin for ScrutinizerPlugin {
     type Args = Config;
 
@@ -101,12 +128,17 @@ impl RustcPlugin for ScrutinizerPlugin {
 
     fn run(
         self,
-        compiler_args: Vec<String>,
+        mut compiler_args: Vec<String>,
         plugin_args: Self::Args,
     ) -> rustc_interface::interface::Result<()> {
-        let mut callbacks = ScrutinizerCallbacks { args: plugin_args };
-        let compiler = rustc_driver::RunCompiler::new(&compiler_args, &mut callbacks);
-        compiler.run()
+        let mut callbacks = match how_to_handle_this_crate(&plugin_args, &mut compiler_args) {
+            CrateHandling::JustCompile => {
+                Box::new(NoopCallbacks) as Box<dyn rustc_driver::Callbacks + Send>
+            }
+            CrateHandling::CompileAndDump => Box::new(DumpOnlyCallbacks),
+            CrateHandling::Analyze => Box::new(ScrutinizerCallbacks { args: plugin_args }),
+        };
+        rustc_driver::RunCompiler::new(&compiler_args, callbacks.as_mut()).run()
     }
 
     fn modify_cargo(&self, cargo: &mut Command, _args: &Self::Args) {
@@ -145,6 +177,31 @@ impl RustcPlugin for ScrutinizerPlugin {
     }
 }
 
+struct NoopCallbacks;
+
+impl rustc_driver::Callbacks for NoopCallbacks {}
+
+struct DumpOnlyCallbacks;
+
+impl rustc_driver::Callbacks for DumpOnlyCallbacks {
+    fn config(&mut self, config: &mut rustc_interface::Config) {
+        // You MUST configure rustc to ensure `get_body_with_borrowck_facts` will work.
+        borrowck_facts::enable_mir_simplification();
+        config.override_queries = Some(borrowck_facts::override_queries);
+    }
+
+    fn after_expansion<'tcx>(
+        &mut self,
+        _compiler: &rustc_interface::interface::Compiler,
+        queries: &'tcx rustc_interface::Queries<'tcx>,
+    ) -> rustc_driver::Compilation {
+        queries.global_ctxt().unwrap().enter(|tcx| {
+            dump_mir_and_borrowck_facts(tcx);
+        });
+        rustc_driver::Compilation::Continue
+    }
+}
+
 struct ScrutinizerCallbacks {
     args: Config,
 }
@@ -157,8 +214,26 @@ struct Output<'tcx> {
 }
 
 impl rustc_driver::Callbacks for ScrutinizerCallbacks {
+    fn config(&mut self, config: &mut rustc_interface::Config) {
+        // You MUST configure rustc to ensure `get_body_with_borrowck_facts` will work.
+        borrowck_facts::enable_mir_simplification();
+        config.override_queries = Some(borrowck_facts::override_queries);
+    }
+
+    fn after_expansion<'tcx>(
+        &mut self,
+        _compiler: &rustc_interface::interface::Compiler,
+        queries: &'tcx rustc_interface::Queries<'tcx>,
+    ) -> rustc_driver::Compilation {
+        queries.global_ctxt().unwrap().enter(|tcx| {
+            dump_mir_and_borrowck_facts(tcx);
+        });
+        rustc_driver::Compilation::Continue
+    }
+
     fn after_analysis<'tcx>(
         &mut self,
+        _handler: &EarlyErrorHandler,
         _compiler: &rustc_interface::interface::Compiler,
         queries: &'tcx rustc_interface::Queries<'tcx>,
     ) -> rustc_driver::Compilation {
@@ -249,11 +324,7 @@ fn analyze_instance<'tcx>(
         let important_args = if args.important_args.is_none() {
             // If no important arguments are provided, assume all are important.
             let arg_count = {
-                let body = instance.subst_mir_and_normalize_erasing_regions(
-                    tcx,
-                    ty::ParamEnv::reveal_all(),
-                    tcx.instance_mir(instance.def).to_owned(),
-                );
+                let body = substituted_mir(&instance, tcx);
                 body.arg_count
             };
             (1..=arg_count).collect()

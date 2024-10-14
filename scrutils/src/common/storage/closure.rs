@@ -32,11 +32,8 @@ impl<'tcx> ClosureInfoStorage<'tcx> {
         tcx: TyCtxt<'tcx>,
     ) {
         if let ty::TyKind::Closure(closure_def_id, ..) = closure_ty.kind() {
-            let resolved_closure_ty = outer_instance.subst_mir_and_normalize_erasing_regions(
-                tcx,
-                ty::ParamEnv::reveal_all(),
-                closure_ty,
-            );
+            let resolved_closure_ty =
+                outer_instance.subst_mir(tcx, ty::EarlyBinder::bind(&closure_ty));
             self.closures
                 .entry(closure_def_id.to_owned())
                 .and_modify(|closure_ref| {

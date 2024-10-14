@@ -1,4 +1,6 @@
-use rustc_middle::mir::{visit::Visitor, Body, CastKind, Location, Mutability, Rvalue};
+use regex::Regex;
+use rustc_middle::mir::TerminatorKind;
+use rustc_middle::mir::{visit::Visitor, Body, Location, Mutability, Terminator};
 use rustc_middle::ty::{self, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable, TypeVisitor};
 
 use std::ops::ControlFlow;
@@ -24,15 +26,20 @@ impl<'tcx> HasTransmute<'tcx> for Body<'tcx> {
 }
 
 impl<'a, 'tcx> Visitor<'tcx> for TransmuteVisitor<'tcx> {
-    fn visit_rvalue(&mut self, rvalue: &Rvalue<'tcx>, location: Location) {
-        if let Rvalue::Cast(cast_kind, _, ty) = rvalue {
-            if let CastKind::Transmute = cast_kind {
-                if contains_mut_ref(ty, self.tcx) {
-                    self.has_transmute = true;
+    fn visit_terminator(&mut self, terminator: &Terminator<'tcx>, location: Location) {
+        if let TerminatorKind::Call { func, .. } = &terminator.kind {
+            if let Some((def_id, generic_args)) = func.const_fn_def() {
+                let def_path_str = format!("{:?}", def_id);
+                let transmute_def_path =
+                    Regex::new(r"core\[\w*\]::intrinsics::\{extern#0\}::transmute").unwrap();
+                if transmute_def_path.is_match(&def_path_str) {
+                    if contains_mut_ref(&generic_args[1].as_type().unwrap(), self.tcx) {
+                        self.has_transmute = true;
+                    }
                 }
             }
-        };
-        self.super_rvalue(rvalue, location);
+        }
+        self.super_terminator(terminator, location);
     }
 }
 
