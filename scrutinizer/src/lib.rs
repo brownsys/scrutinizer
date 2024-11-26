@@ -21,7 +21,6 @@ use scrutils::{
 
 use chrono::offset::Local;
 use clap::Parser;
-use log::trace;
 use regex::Regex;
 use rustc_middle::ty;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
@@ -299,13 +298,19 @@ fn scrutinizer<'tcx>(tcx: ty::TyCtxt<'tcx>, args: &Config) -> Vec<PurityAnalysis
         .collect()
 }
 
+macro_rules! warn {
+    ($($tokens: tt)*) => {
+        println!("cargo:warning=\r\x1b[32;1mScrutinizer: {}", format!($($tokens)*))
+    }
+}
+
 fn analyze_instance<'tcx>(
     instance: ty::Instance<'tcx>,
     annotated_pure: bool,
     tcx: ty::TyCtxt<'tcx>,
     args: &Config,
 ) -> PurityAnalysisResult<'tcx> {
-    trace!("started analyzing instance {:?}", &instance);
+    warn!("\x1b[96mStarted analyzing {:?}\x1b[0m", &instance.def_id());
 
     let def_id = instance.def_id();
 
