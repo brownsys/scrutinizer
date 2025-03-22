@@ -30,11 +30,8 @@ pub fn compute_deps_for_body<'tcx>(body: Body<'tcx>, tcx: TyCtxt<'tcx>) -> HashS
 }
 
 fn get_direct_deps() -> Vec<String> {
-    let output = Command::new("zsh")
-        .args([
-            "-c",
-            "$HOME/.cargo/bin/cargo tree --quiet --frozen --prefix=none --depth 1",
-        ])
+    let output = Command::new("cargo")
+        .args(["tree", "--quiet", "--frozen", "--prefix=none", "--depth", "1"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -52,15 +49,8 @@ pub fn compute_dep_strings_for_crates(crate_names: &HashSet<String>) -> HashMap<
     let direct_deps = get_direct_deps();
     crate_names.iter().filter_map(|crate_name| {
         direct_deps.iter().find(|dep_spec| dep_spec.contains(crate_name)).map(|crate_spec| {
-            let output = Command::new("zsh")
-            .args([
-                "-c",
-                format!(
-                    "$HOME/.cargo/bin/cargo tree --quiet --frozen --no-dedupe --prefix=none --package {}",
-                    crate_spec
-                )
-                .as_str(),
-            ])
+            let output = Command::new("cargo")
+            .args(["tree", "--quiet", "--frozen", "--no-dedupe", "--prefix=none", "--package", crate_spec])
             .output()
             .unwrap();
             let stdout = String::from_utf8(output.stdout).unwrap();
