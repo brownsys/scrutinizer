@@ -36,7 +36,11 @@ pub fn compute_dependent_locals<'tcx>(
         engine::iterate_to_fixpoint(tcx, body, location_domain, analysis)
     };
 
-    trace!("computing location dependencies for {:?}, {:?}", def_id, targets);
+    trace!(
+        "computing location dependencies for {:?}, {:?}",
+        def_id,
+        targets
+    );
     // Use Flowistry to compute the locations and places influenced by the target.
     let location_deps =
         flowistry::infoflow::compute_dependencies(&results, targets.clone(), direction)
@@ -65,9 +69,13 @@ pub fn compute_dependent_locals<'tcx>(
                         }
                     },
                     Either::Right(terminator) => match &terminator.kind {
-                        TerminatorKind::Call { destination, .. } => {
-                            vec![destination.local]
-                        }
+                        TerminatorKind::Call {
+                            destination, args, ..
+                        } => args
+                            .iter()
+                            .filter_map(|op| op.place().map(|place| place.local))
+                            .chain([destination.local])
+                            .collect(),
                         TerminatorKind::SwitchInt { .. } => vec![],
                         _ => {
                             unimplemented!()
