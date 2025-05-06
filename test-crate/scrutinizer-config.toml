@@ -190,6 +190,7 @@ allowlist = [
 
   # Format strings.
   'alloc\[\w*\]::fmt::format',
+  'core\[\w*\]::fmt::rt::\{impl#1\}::new',
 
   # Rust 1.70 calls to memcmp to compare slices.
   # This is removed in further versions.
