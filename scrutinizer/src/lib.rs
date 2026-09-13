@@ -110,6 +110,27 @@ impl RustcPlugin for ScrutinizerPlugin {
         env!("CARGO_PKG_VERSION").into()
     }
 
+    // We run with CrateFilter::AllCrates, which makes rustc_plugin install the
+    // driver as RUSTC_WRAPPER, so dependency build scripts query the compiler
+    // version through us. Since 0.2.172, libc's build script does exactly that
+    // and asserts the answer starts with "rustc 1", so reporting rustc_plugin's
+    // own version ("rustc_plugin 0.7.4-...") makes it panic. Forward the
+    // question to the real rustc, which cargo passes as argv[1] in wrapper mode.
+    fn reported_driver_version(&self) -> Cow<'static, str> {
+        let rustc = env::args()
+            .nth(1)
+            .filter(|arg| {
+                std::path::Path::new(arg).file_stem() == Some("rustc".as_ref())
+            })
+            .unwrap_or_else(|| "rustc".to_string());
+        match Command::new(rustc).arg("--version").output() {
+            Ok(output) if output.status.success() => {
+                Cow::Owned(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            }
+            _ => Cow::Borrowed("rustc 1.74.0-nightly"),
+        }
+    }
+
     fn driver_name(&self) -> Cow<'static, str> {
         "scrutinizer-driver".into()
     }

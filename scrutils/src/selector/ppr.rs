@@ -31,7 +31,12 @@ impl<'tcx> Visitor<'tcx> for PPRCollector<'tcx> {
             let func_ty = func.ty(&self.body, self.tcx);
             if let ty::TyKind::FnDef(def_id, ..) = func_ty.kind() {
                 let ppr_str = self.tcx.def_path_str(def_id.to_owned());
-                if ppr_str == "alohomora::pure::PrivacyPureRegion::<F>::new" {
+                // The framework was renamed alohomora -> sesame, and
+                // PrivacyPureRegion -> VerifiedRegion; accept both spellings so
+                // this keeps working against older checkouts.
+                if ppr_str == "alohomora::pure::PrivacyPureRegion::<F>::new"
+                    || ppr_str == "sesame::verified::VerifiedRegion::<F>::new"
+                {
                     self.pprs.push(args[0].ty(&self.body, self.tcx));
                 }
             }
