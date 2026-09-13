@@ -150,28 +150,7 @@ impl<'tcx> intravisit::Visitor<'tcx> for DumpingVisitor<'tcx> {
         _: rustc_span::Span,
         local_def_id: rustc_hir::def_id::LocalDefId,
     ) {
-        // rustc does not run `mir_borrowck` for every item the HIR visitor
-        // reaches -- notably closures inside `default` methods of specializable
-        // impls (e.g. sesame_sandbox's FastTransfer impls). For those,
-        // `get_body_with_borrowck_facts` panics instead of returning an option,
-        // so guard the call and skip the body rather than aborting the crate.
-        let prev_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let retrieved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            CachedBody::retrieve(self.tcx, local_def_id)
-        }));
-        std::panic::set_hook(prev_hook);
-
-        let to_write = match retrieved {
-            Ok(body) => body,
-            Err(_) => {
-                log::warn!(
-                    "no borrowck facts for {:?}; skipping it and its nested bodies",
-                    self.tcx.def_path_str(local_def_id.to_def_id())
-                );
-                return;
-            }
-        };
+        let to_write = CachedBody::retrieve(self.tcx, local_def_id);
 
         let dir = &self.target_dir;
         let path = dir.join(
